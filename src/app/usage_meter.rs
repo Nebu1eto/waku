@@ -186,7 +186,11 @@ impl Waku {
             .latest_context_report
             .as_ref()
             .and_then(|report| report.context.clone());
-        let (context, estimated) = meter_usage(session.context_usage, report.as_ref());
+        let (context, estimated) = meter_usage(
+            session.context_usage,
+            report.as_ref(),
+            session.model.as_deref(),
+        );
         let theme = Theme::current(cx);
         let plan = self.plan_usage.get(&provider).cloned();
         let error = self.plan_usage_error.get(&provider).cloned();
@@ -299,18 +303,26 @@ impl Waku {
 /// The meter's occupancy and whether it is the provider's estimate. A
 /// fresh choco-pi session has measured nothing yet, so its context report's
 /// estimate stands in for what would otherwise read 0%. Streamed usage wins
-/// once a model call has measured anything.
+/// once a model call has measured anything. A report for the session's
+/// current model owns the window: its effective cap (choco-pi's 600K) beats
+/// the raw model window the stream carries. A report for another model is
+/// stale, so the streamed window wins over it.
 fn meter_usage(
     context: Option<ContextUsage>,
     report: Option<&ContextReport>,
+    session_model: Option<&str>,
 ) -> (Option<ContextUsage>, bool) {
     let Some(report) = report else {
         return (context, false);
     };
-    let window = context
-        .and_then(|usage| usage.window)
-        .or(Some(report.context_window))
-        .filter(|window| *window > 0);
+    let streamed = context.and_then(|usage| usage.window);
+    let reported = Some(report.context_window);
+    let window = if report_applies(report, session_model) {
+        reported.filter(|window| *window > 0).or(streamed)
+    } else {
+        streamed.or(reported)
+    }
+    .filter(|window| *window > 0);
     match context {
         Some(usage) if usage.tokens > 0 => (Some(ContextUsage { window, ..usage }), false),
         _ => {
@@ -318,6 +330,22 @@ fn meter_usage(
             (Some(ContextUsage { tokens, window }), estimated)
         }
     }
+}
+
+/// Whether a context report describes the session's current model. An
+/// unknown model on either side cannot contradict it.
+fn report_applies(report: &ContextReport, session_model: Option<&str>) -> bool {
+    match (
+        known_model(report.model.as_deref()),
+        known_model(session_model),
+    ) {
+        (Some(reported), Some(active)) => reported == active,
+        _ => true,
+    }
+}
+
+fn known_model(model: Option<&str>) -> Option<&str> {
+    model.map(str::trim).filter(|model| !model.is_empty())
 }
 
 /// "≈" before a number the provider estimated rather than measured.
@@ -1013,7 +1041,7 @@ mod tests {
     #[test]
     fn meter_falls_back_to_the_reported_estimate_until_measured() {
         let report = context_report(None);
-        let (usage, estimated) = meter_usage(None, Some(&report));
+        let (usage, estimated) = meter_usage(None, Some(&report), None);
         assert!(estimated);
         assert_eq!(
             usage,
@@ -1028,12 +1056,12 @@ mod tests {
             tokens: 0,
             window: None,
         });
-        assert_eq!(meter_usage(empty, Some(&report)), (usage, true));
+        assert_eq!(meter_usage(empty, Some(&report), None), (usage, true));
 
         // A measured report and streamed usage are both exact.
         let measured = context_report(Some(50_000));
         assert_eq!(
-            meter_usage(None, Some(&measured)),
+            meter_usage(None, Some(&measured), None),
             (
                 Some(ContextUsage {
                     tokens: 50_000,
@@ -1047,7 +1075,7 @@ mod tests {
             window: None,
         });
         assert_eq!(
-            meter_usage(streamed, Some(&report)),
+            meter_usage(streamed, Some(&report), None),
             (
                 Some(ContextUsage {
                     tokens: 60_000,
@@ -1057,7 +1085,45 @@ mod tests {
             )
         );
         // Without a report nothing changes.
-        assert_eq!(meter_usage(streamed, None), (streamed, false));
+        assert_eq!(meter_usage(streamed, None, None), (streamed, false));
+    }
+
+    /// choco-pi caps the window below the model's raw one; the stream carries
+    /// the raw window, the report the effective cap.
+    #[test]
+    fn meter_window_prefers_the_report_for_the_current_model() {
+        const MODEL: &str = "anthropic/claude-haiku-5-5";
+        let mut report = context_report(None);
+        report.context_window = 600_000;
+        report.model = Some(MODEL.to_owned());
+        let streamed = Some(ContextUsage {
+            tokens: 19_300,
+            window: Some(1_000_000),
+        });
+        let capped = Some(ContextUsage {
+            tokens: 19_300,
+            window: Some(600_000),
+        });
+
+        // Same model: the report's cap is the denominator.
+        let (usage, estimated) = meter_usage(streamed, Some(&report), Some(MODEL));
+        assert_eq!((usage, estimated), (capped, false));
+        let percent = context_percent(usage.unwrap()).unwrap();
+        assert!(
+            (percent - 19_300.0 * 100.0 / 600_000.0).abs() < 1e-9,
+            "{percent}"
+        );
+        // An unknown session model cannot contradict the report.
+        assert_eq!(meter_usage(streamed, Some(&report), None), (capped, false));
+
+        // A report for another model is stale: the streamed window wins.
+        assert_eq!(
+            meter_usage(streamed, Some(&report), Some("anthropic/claude-opus-5-5")),
+            (streamed, false)
+        );
+
+        // No report: unchanged.
+        assert_eq!(meter_usage(streamed, None, Some(MODEL)), (streamed, false));
     }
 
     #[test]
