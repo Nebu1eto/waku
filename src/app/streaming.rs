@@ -1,5 +1,24 @@
 use super::*;
 
+/// Give an unsolicited provider run a transcript turn without a user message.
+fn begin_unprompted_provider_turn(session: &mut AgentSession) -> bool {
+    if session.active_turn_id().is_some()
+        || !matches!(
+            session.provider,
+            ProviderKind::Codex
+                | ProviderKind::Claude
+                | ProviderKind::OpenCode
+                | ProviderKind::ChocoPi
+        )
+    {
+        return false;
+    }
+    session.begin_provider_turn();
+    session.mark_active_turn_provider_started();
+    session.status = SessionStatus::Working;
+    true
+}
+
 impl Waku {
     pub(super) fn finish_streaming_assistant(&mut self, session_id: Uuid) {
         if let Some(session) = self.state.session_mut(session_id) {
@@ -316,22 +335,18 @@ impl Waku {
                         // a `/goal` began: the provider's start confirms it.
                         session.mark_active_turn_provider_started();
                         session.status = SessionStatus::Working;
-                    } else if matches!(
-                        session.provider,
-                        ProviderKind::Codex | ProviderKind::Claude | ProviderKind::OpenCode
-                    ) {
+                    } else if begin_unprompted_provider_turn(session) {
                         // Some providers start turns on their own: Codex goal
                         // continuation pursues an active goal whenever the
                         // thread is idle, Claude Code re-enters the model
                         // once a backgrounded command, subagent or monitor
                         // settles, and OpenCode's shared service resumes a
                         // session after a restart or runs one the user's own
-                        // client prompted. Give the turn a transcript home —
+                        // client prompted. choco-pi also wakes after background
+                        // work settles or an active goal continues.
+                        // Give the turn a transcript home —
                         // there is no user message for it — so its work
                         // streams in instead of being dropped.
-                        session.begin_provider_turn();
-                        session.mark_active_turn_provider_started();
-                        session.status = SessionStatus::Working;
                         self.state.mark_session_dirty(session_id);
                     }
                 }
@@ -1038,4 +1053,39 @@ pub(super) fn append_text_delta_to_session(
         session.messages.push(message);
     }
     session.updated_at = unix_time();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chocopi_unprompted_provider_turn_keeps_output_in_the_transcript() {
+        let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::ChocoPi);
+        assert!(begin_unprompted_provider_turn(&mut session));
+        let turn_id = session.active_turn_id().expect("provider turn created");
+        assert_eq!(session.status, SessionStatus::Working);
+        assert!(session.messages.is_empty());
+        assert!(super::super::runtime::session_has_active_provider_turn(
+            &session
+        ));
+        assert!(!begin_unprompted_provider_turn(&mut session));
+
+        let session_id = session.id;
+        let mut sessions = [session];
+        append_text_delta_to_session(&mut sessions, session_id, false, "awake".into());
+        assert_eq!(sessions[0].messages.len(), 1);
+        assert_eq!(sessions[0].messages[0].turn_id, Some(turn_id));
+        assert_eq!(sessions[0].messages[0].role, MessageRole::Assistant);
+        assert_eq!(sessions[0].messages[0].content, "awake");
+    }
+
+    #[test]
+    fn plain_pi_flavors_do_not_start_unprompted_provider_turns() {
+        for provider in [ProviderKind::Pi, ProviderKind::OhMyPi] {
+            let mut session = AgentSession::new(Uuid::new_v4(), provider);
+            assert!(!begin_unprompted_provider_turn(&mut session));
+            assert!(session.active_turn_id().is_none());
+        }
+    }
 }

@@ -171,6 +171,7 @@ pub fn provider_color(theme: &Theme, provider: ProviderKind) -> Hsla {
         | ProviderKind::Grok
         | ProviderKind::Kimi
         | ProviderKind::OhMyPi
+        | ProviderKind::ChocoPi
         | ProviderKind::Pi => {
             if theme.is_dark {
                 rgb(0xF3F3F3).into()
@@ -194,6 +195,7 @@ pub fn provider_icon(provider: ProviderKind) -> &'static str {
         ProviderKind::Grok => "icons/provider-grok.svg",
         ProviderKind::Kimi => "icons/provider-kimi.svg",
         ProviderKind::OhMyPi => "icons/provider-ohmypi.svg",
+        ProviderKind::ChocoPi => "icons/provider-chocopi.svg",
         ProviderKind::Pi => "icons/provider-pi.svg",
     }
 }

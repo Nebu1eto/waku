@@ -1,0 +1,131 @@
+{"type":"extension_ui_request","id":"c43a028f-a982-45a0-9fdf-986c43fcdd49","method":"setStatus","statusKey":"daybreak-refresh"}
+{"type":"extension_ui_request","id":"132c5ea0-713e-4ae2-91ad-94e4da282358","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"6b9f2661-20a4-4893-8b6b-8244113666e2","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"6408fed1-7827-4bdc-9c4f-04b982e4308a","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"extension_ui_request","id":"88fc82d7-e543-48f4-9b11-d9d407f9618c","method":"setStatus","statusKey":"codex-adapter"}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi-fast-mode","data":{"redacted":true},"id":"5051bf28","parentId":"e9c128bb","timestamp":"2026-10-11T05:44:03.244Z"}}
+{"type":"extension_ui_request","id":"d624dada-85b3-4656-a7c6-e9a99e80e461","method":"select","title":"RPC probe select","options":["probe-value"]}
+{"type":"extension_ui_request","id":"b3f06db9-f21b-4b9a-9fdf-12d5b83186de","method":"input","title":"RPC probe input"}
+{"type":"extension_ui_request","id":"37449fcd-8248-47cf-8955-66881a2f739f","method":"editor","title":"RPC probe editor","prefill":"probe-value"}
+{"type":"extension_ui_request","id":"3e7fdd00-0bf9-46bc-9eee-5bd010e17a7b","method":"confirm","title":"RPC probe confirm","message":"No destructive operation is performed."}
+{"type":"entry_appended","entry":{"type":"custom","customType":"rpc-host-bridge-probe/ui","data":{"redacted":true},"id":"e9f8f0fd","parentId":"5051bf28","timestamp":"2026-10-11T05:44:03.245Z"}}
+{"id":"probe-3","type":"response","command":"prompt","success":true,"data":{"disposition":"handled"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:host-bridge/goal","data":{"schema":1,"at":1791697443268,"goal":null},"id":"5b34d01f","parentId":"e9f8f0fd","timestamp":"2026-10-11T05:44:03.269Z"}}
+{"id":"probe-4","type":"response","command":"prompt","success":true,"data":{"disposition":"handled"}}
+{"type":"extension_ui_request","id":"9f153ea9-24ac-4629-82a6-40acb93ade51","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"4fc80c73-bab3-4b6a-addb-dcf78355a06f","method":"setStatus","statusKey":"codex-adapter"}
+{"type":"extension_ui_request","id":"eadefa6a-1186-48d0-b274-70f8873659e2","method":"setStatus","statusKey":"codex-adapter"}
+{"type":"extension_ui_request","id":"349cde2d-6dad-4257-a6ec-cbfcc5eb0e94","method":"setStatus","statusKey":"daybreak-refresh"}
+{"id":"probe-5","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+{"type":"agent_start"}
+{"type":"extension_ui_request","id":"af518330-d681-4622-bcd5-e6d01c67e0ce","method":"setStatus","statusKey":"codex-goal"}
+{"type":"turn_start"}
+{"type":"extension_ui_request","id":"1f60f0bb-0fa7-4ae9-a173-a0ee007312b2","method":"notify","message":"File checkpoints are off for this session: No Git repository with a working tree at /work. Conversation rewind and fork still work.","notifyType":"warning"}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:task-lineage:boundary","data":{"redacted":true},"id":"4ca5f8b5","parentId":"5d5f4ab2","timestamp":"2026-10-11T05:44:06.430Z"}}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_3a8b392c38654457b31950d7ddfdcc04|fc_03bc268b969a7a12016acb222827088191be37c15cf3baa58c","name":"Agent","arguments":{"subagent_type":"general","name":"rpc-probe-child","run_in_background":true,"fast_mode":true,"prompt":"Reply exactly RPC_PROBE_CHILD_DONE without tools or delegation.","description":"RPC probe child"}}]}}
+{"type":"tool_execution_start","toolCallId":"call_3a8b392c38654457b31950d7ddfdcc04|fc_03bc268b969a7a12016acb222827088191be37c15cf3baa58c","toolName":"Agent","args":{"subagent_type":"general","name":"rpc-probe-child","run_in_background":true,"fast_mode":true,"prompt":"Reply exactly RPC_PROBE_CHILD_DONE without tools or delegation.","description":"RPC probe child"}}
+{"type":"extension_ui_request","id":"e64645d2-d383-4a9b-97e4-5741998d48af","method":"setStatus","statusKey":"subagents"}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:host-bridge/subagent","data":{"schema":1,"at":1791697448927,"event":"started","agent":{"id":"10b7e07d-d3e4-495","parentId":null,"role":"general","model":"openai-codex/gpt-6.1-sol","description":"RPC probe child","background":true,"cwd":"/work","toolCallId":null,"outputFile":null,"status":"running","startedAt":1791697448926,"finishedAt":null,"summary":null},"live":["10b7e07d-d3e4-495"]},"id":"40e92656","parentId":"302e6986","timestamp":"2026-10-11T05:44:08.927Z"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:host-bridge/subagent","data":{"schema":1,"at":1791697448929,"event":"created","agent":{"id":"10b7e07d-d3e4-495","parentId":null,"role":"general","model":"openai-codex/gpt-6.1-sol","description":"RPC probe child","background":true,"cwd":"/work","toolCallId":"call_3a8b392c38654457b31950d7ddfdcc04|fc_03bc268b969a7a12016acb222827088191be37c15cf3baa58c","outputFile":"/nonexistent/choco-pi-subagents/tasks/10b7e07d-d3e4-495.output","status":"running","startedAt":1791697448926,"finishedAt":null,"summary":null},"live":["10b7e07d-d3e4-495"]},"id":"181504f2","parentId":"40e92656","timestamp":"2026-10-11T05:44:08.929Z"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"subagent-journal","data":{"redacted":true},"id":"b70dc928","parentId":"181504f2","timestamp":"2026-10-11T05:44:08.930Z"}}
+{"type":"tool_execution_end","toolCallId":"call_3a8b392c38654457b31950d7ddfdcc04|fc_03bc268b969a7a12016acb222827088191be37c15cf3baa58c","toolName":"Agent","result":{"content":[{"type":"text","text":"Agent started in background.\nAgent ID: 10b7e07d-d3e4-495\nType: general\nDescription: RPC probe child\nOutput file: /nonexistent/choco-pi-subagents/tasks/10b7e07d-d3e4-495.output\n\nYou will be notified when this agent completes.\nContinue other work until the terminal completion notification arrives, then retrieve the result exactly once with get_subagent_result. Use steer_subagent to send it messages.\nDo not duplicate this agent's work."}],"details":{"displayName":"general","description":"RPC probe child","subagentType":"general","tags":["thinking: medium","fast","background"],"toolUses":0,"tokens":"","durationMs":0,"status":"background","agentId":"10b7e07d-d3e4-495","outputFile":"/nonexistent/choco-pi-subagents/tasks/10b7e07d-d3e4-495.output"}},"isError":false}
+{"type":"extension_ui_request","id":"e2e1e0f8-142b-472f-9bda-97f3daa72855","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"be5c9794-01b1-465a-a365-0f88fc85f6d6","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"74d13d96-f69f-4296-8f8f-9e0197faccbc","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"turn_end"}
+{"type":"extension_ui_request","id":"2234d336-fb60-4623-b427-f4138d71ace2","method":"setStatus","statusKey":"codex-goal"}
+{"type":"turn_start"}
+{"type":"extension_ui_request","id":"0402ed4d-cd32-4bba-844d-07702ea2f86a","method":"setStatus","statusKey":"choco-pi.host-bridge","statusText":"{\"schema\":1,\"at\":1791697449178,\"subagents\":[{\"id\":\"10b7e07d-d3e4-495\",\"status\":\"running\",\"toolUses\":0,\"tokens\":0,\"turnCount\":null,\"maxTurns\":null,\"durationMs\":252,\"activity\":null}],\"shells\":[]}"}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Child"}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" started"}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"."}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Child started."}]}}
+{"type":"extension_ui_request","id":"d9f067e9-dbca-4489-a125-3cb475d5660f","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"326d6868-19b1-4635-ba48-bb3f738c8647","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"4441b665-303e-4c48-aa34-17efead454ed","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"turn_end"}
+{"type":"extension_ui_request","id":"bd10ab15-62c7-4448-8cc9-6b66f3495b3f","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"0e961ef6-a776-4c24-a7f2-d17563d9fc4a","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"entry_appended","entry":{"type":"custom","customType":"subagent-journal","data":{"redacted":true},"id":"212c9355","parentId":"013c3a30","timestamp":"2026-10-11T05:44:12.238Z"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:host-bridge/subagent","data":{"schema":1,"at":1791697452246,"event":"completed","agent":{"id":"10b7e07d-d3e4-495","parentId":null,"role":"general","model":"openai-codex/gpt-6.1-sol","description":"RPC probe child","background":true,"cwd":"/work","toolCallId":"call_3a8b392c38654457b31950d7ddfdcc04|fc_03bc268b969a7a12016acb222827088191be37c15cf3baa58c","outputFile":"/nonexistent/choco-pi-subagents/tasks/10b7e07d-d3e4-495.output","status":"completed","startedAt":1791697448926,"finishedAt":1791697452246,"summary":"RPC_PROBE_CHILD_DONE"},"live":[]},"id":"28c9c096","parentId":"212c9355","timestamp":"2026-10-11T05:44:12.246Z"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"subagents:record","data":{"redacted":true},"id":"7ac3084c","parentId":"28c9c096","timestamp":"2026-10-11T05:44:12.248Z"}}
+{"type":"extension_ui_request","id":"aa5e0549-53c5-40a0-9d3f-529210673c56","method":"setStatus","statusKey":"subagents"}
+{"type":"entry_appended","entry":{"type":"custom","customType":"subagent-journal","data":{"redacted":true},"id":"eb309ffb","parentId":"7ac3084c","timestamp":"2026-10-11T05:44:12.248Z"}}
+{"type":"extension_ui_request","id":"9553700f-fb79-4c40-a12d-d1187c44de0d","method":"setStatus","statusKey":"choco-pi.host-bridge","statusText":"{\"schema\":1,\"at\":1791697452451,\"subagents\":[],\"shells\":[]}"}
+{"type":"session_info_changed","name":"Start RPC Probe Child Agent"}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:task-lineage:outcome","data":{"redacted":true},"id":"0fd469d1","parentId":"e6afc398","timestamp":"2026-10-11T05:44:12.704Z"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:task-lineage:boundary","data":{"redacted":true},"id":"35ebb453","parentId":"0fd469d1","timestamp":"2026-10-11T05:44:12.704Z"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:task-state:resource","data":{"redacted":true},"id":"33610f94","parentId":"35ebb453","timestamp":"2026-10-11T05:44:12.712Z"}}
+{"type":"extension_ui_request","id":"f44276e3-2a9f-4fe6-b4f7-0ef3d8c29b42","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"agent_settled"}
+{"type":"extension_ui_request","id":"051ed13c-8636-4173-a873-5d085709f4d3","method":"setStatus","statusKey":"codex-adapter"}
+{"type":"agent_start"}
+{"type":"extension_ui_request","id":"1b73fb54-2fe5-4670-bdfe-c478a5e70636","method":"setStatus","statusKey":"codex-goal"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"RPC"}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"_PRO"}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"BE"}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"_PARENT"}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"_DONE"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"RPC_PROBE_PARENT_DONE"}]}}
+{"type":"extension_ui_request","id":"dcec3955-c4c0-4986-a483-59d4bddd58a8","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"a864f3c7-e2cf-44fd-b2c6-365746ea3ca0","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"02b10021-64f6-4f61-92c2-be34a723e427","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"turn_end"}
+{"type":"extension_ui_request","id":"d969302c-88f4-4fce-b3b4-574f64ac6053","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"1fc8808f-458c-401f-939b-df72d321ee4a","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"extension_ui_request","id":"29dfb542-b066-49c9-bf21-15d3dadec4a7","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"agent_settled"}
+{"type":"extension_ui_request","id":"36768de7-2198-46d7-aeec-71fc8bb8a518","method":"setStatus","statusKey":"codex-adapter"}
+{"type":"extension_ui_request","id":"57e6331b-1d77-4fe8-87f2-3474f15fda1a","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"6ff982fd-af18-4916-a1a8-94e7d153ca27","method":"setStatus","statusKey":"codex-adapter"}
+{"id":"probe-6","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+{"type":"agent_start"}
+{"type":"extension_ui_request","id":"30cd8878-0662-4216-922b-0ba9bbba5485","method":"setStatus","statusKey":"codex-goal"}
+{"type":"turn_start"}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:task-lineage:boundary","data":{"redacted":true},"id":"945ea73b","parentId":"e0bd21c6","timestamp":"2026-10-11T05:44:15.449Z"}}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_30738ec233e044e5879134efd812104d|fc_03bc268b969a7a12016acb223138448191bc98c9e2ba5bb834","name":"shell_start","arguments":{"command":"printf bridge-shell-ok","name":"bridge-probe-root-liveness"}}]}}
+{"type":"tool_execution_start","toolCallId":"call_30738ec233e044e5879134efd812104d|fc_03bc268b969a7a12016acb223138448191bc98c9e2ba5bb834","toolName":"shell_start","args":{"command":"printf bridge-shell-ok","name":"bridge-probe-root-liveness"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:host-bridge/shell","data":{"schema":1,"at":1791697458167,"event":"started","shell":{"id":"747031e1-de4f-41e3-976b-b0f286a748d4","name":"bridge-probe-root-liveness","command":"printf bridge-shell-ok","cwd":"/work","pid":61259,"exitCode":null,"startedAt":1791697458166,"finishedAt":null,"toolCallId":"call_30738ec233e044e5879134efd812104d|fc_03bc268b969a7a12016acb223138448191bc98c9e2ba5bb834","tailPath":null},"live":["747031e1-de4f-41e3-976b-b0f286a748d4"]},"id":"b2c28bfb","parentId":"dd8cd1fc","timestamp":"2026-10-11T05:44:18.167Z"}}
+{"type":"tool_execution_end","toolCallId":"call_30738ec233e044e5879134efd812104d|fc_03bc268b969a7a12016acb223138448191bc98c9e2ba5bb834","toolName":"shell_start","result":{"content":[{"type":"text","text":"{\n  \"shellId\": \"747031e1-de4f-41e3-976b-b0f286a748d4\",\n  \"ownerId\": \"01a1297d-364d-742f-bc4b-fd699cbef853\",\n  \"command\": \"printf bridge-shell-ok\",\n  \"cwd\": \"/work\",\n  \"state\": \"running\",\n  \"startedAt\": 1791697458166,\n  \"name\": \"bridge-probe-root-liveness\",\n  \"pid\": 61259\n}"}],"details":{"shellId":"747031e1-de4f-41e3-976b-b0f286a748d4","ownerId":"01a1297d-364d-742f-bc4b-fd699cbef853","command":"printf bridge-shell-ok","cwd":"/work","state":"running","startedAt":1791697458166,"name":"bridge-probe-root-liveness","pid":61259}},"isError":false}
+{"type":"extension_ui_request","id":"2af5fa0b-c7a0-415d-bfb7-b7f931a1ab34","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"41ccbf08-6198-496d-8f3d-3940e64e270e","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"b0e3ebfc-f061-493d-9a08-cb6ef5ea6151","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"turn_end"}
+{"type":"extension_ui_request","id":"8a79b4da-8997-4136-b401-ca08a4ee6a6c","method":"setStatus","statusKey":"codex-goal"}
+{"type":"turn_start"}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:host-bridge/shell","data":{"schema":1,"at":1791697458221,"event":"exited","shell":{"id":"747031e1-de4f-41e3-976b-b0f286a748d4","name":"bridge-probe-root-liveness","command":"printf bridge-shell-ok","cwd":"/work","pid":61259,"exitCode":0,"startedAt":1791697458166,"finishedAt":1791697458220,"toolCallId":"call_30738ec233e044e5879134efd812104d|fc_03bc268b969a7a12016acb223138448191bc98c9e2ba5bb834","tailPath":null},"live":[]},"id":"d09c8068","parentId":"af83d971","timestamp":"2026-10-11T05:44:18.221Z"}}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"started"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"started"}]}}
+{"type":"extension_ui_request","id":"de7f4b95-243d-4fce-b182-f2b1060d76e9","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"362c4ee9-e6bb-4581-8043-ed7b4e5cfa91","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"d8322fe4-8d24-43b8-ac90-970a3199dd46","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"turn_end"}
+{"type":"extension_ui_request","id":"71101c7a-938f-4953-9a90-23a45c41f571","method":"setStatus","statusKey":"codex-goal"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":""}]}}
+{"type":"extension_ui_request","id":"274fec7c-e496-4051-b959-beed17227ad1","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"c085889a-deeb-4ed0-8aab-6358cef193e1","method":"setStatus","statusKey":"codex-goal"}
+{"type":"extension_ui_request","id":"16488478-eadd-431f-9e62-9dbbc5b5d9aa","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"turn_end"}
+{"type":"extension_ui_request","id":"778696bd-1ba8-4ea4-8f7c-9779497866d1","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"7f328898-f059-4254-b5c5-3e7516c5be74","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:task-lineage:outcome","data":{"redacted":true},"id":"09734940","parentId":"a64c9ac7","timestamp":"2026-10-11T05:44:22.157Z"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:task-lineage:boundary","data":{"redacted":true},"id":"9922a18d","parentId":"09734940","timestamp":"2026-10-11T05:44:22.157Z"}}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:task-state:resource","data":{"redacted":true},"id":"bf9610d6","parentId":"9922a18d","timestamp":"2026-10-11T05:44:22.168Z"}}
+{"type":"extension_ui_request","id":"d307a34d-1916-4dce-805f-f867558a2ab6","method":"setStatus","statusKey":"choco-pi-lsp"}
+{"type":"agent_settled"}
+{"type":"extension_ui_request","id":"f9206962-7210-472c-ba9a-61118cbcf63f","method":"setStatus","statusKey":"codex-adapter"}
+{"type":"entry_appended","entry":{"type":"custom","customType":"choco-pi:host-bridge/goal","data":{"schema":1,"at":1791697462173,"goal":null},"id":"daffc9fc","parentId":"bf9610d6","timestamp":"2026-10-11T05:44:22.173Z"}}
+{"id":"probe-7","type":"response","command":"prompt","success":true,"data":{"disposition":"handled"}}
+{"type":"extension_ui_request","id":"3efe727d-3be9-43b2-abfb-eb6fdd949ca6","method":"setStatus","statusKey":"synthetic-usage"}
+{"type":"extension_ui_request","id":"4ad98a7c-0eab-405b-b2bb-294ab7c1a920","method":"setStatus","statusKey":"subagents"}

@@ -97,7 +97,9 @@ pub fn fallback_models(provider: ProviderKind) -> Vec<ProviderModel> {
         // Pi, Oh My Pi, and Kimi Code all take their catalog from the user's
         // configured LLM providers. A fabricated fallback would make
         // unavailable models look selectable.
-        ProviderKind::Kimi | ProviderKind::OhMyPi | ProviderKind::Pi => Vec::new(),
+        ProviderKind::Kimi | ProviderKind::OhMyPi | ProviderKind::ChocoPi | ProviderKind::Pi => {
+            Vec::new()
+        }
     }
 }
 
@@ -137,7 +139,9 @@ pub fn discover_catalog(
         ProviderKind::OpenCode => crate::opencode_session::discover_catalog(binary),
         ProviderKind::Grok => (discover_grok_models(binary), None),
         ProviderKind::Kimi => (discover_kimi_models(binary), None),
-        ProviderKind::Pi => (discover_pi_models(binary, PiDialect::Pi), None),
+        ProviderKind::Pi | ProviderKind::ChocoPi => {
+            (discover_pi_models(binary, PiDialect::Pi), None)
+        }
         ProviderKind::OhMyPi => (discover_pi_models(binary, PiDialect::OhMyPi), None),
     };
     let models = if discovered.is_empty() {
@@ -1603,6 +1607,18 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&path, permissions).unwrap();
         path
+    }
+
+    #[test]
+    fn chocopi_uses_a_separate_model_cache() {
+        assert_eq!(
+            model_cache_path(ProviderKind::ChocoPi).file_name().unwrap(),
+            "chocopi.json"
+        );
+        assert_ne!(
+            model_cache_path(ProviderKind::ChocoPi),
+            model_cache_path(ProviderKind::Pi)
+        );
     }
 
     #[test]

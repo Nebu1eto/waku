@@ -366,12 +366,16 @@ fn agent_arguments(
                 push(&mut args, effort);
             }
         }
-        ProviderKind::Pi => {
+        ProviderKind::Pi | ProviderKind::ChocoPi => {
             push(&mut args, "--print");
             push(&mut args, "--no-session");
             push(&mut args, "--no-tools");
             push(&mut args, "--no-context-files");
-            push(&mut args, "--no-extensions");
+            // ChocoPi extensions register its model providers. U7 measured
+            // ~9.6–10 s startup with them enabled, with no side effects.
+            if provider == ProviderKind::Pi {
+                push(&mut args, "--no-extensions");
+            }
             push(&mut args, "--no-skills");
             push(&mut args, "--no-prompt-templates");
             push(&mut args, "--no-approve");
@@ -789,7 +793,12 @@ mod tests {
                     assert!(has(&args, "--no-subagents"));
                     assert!(has_pair(&args, "--reasoning-effort", "low"));
                 }
-                ProviderKind::Pi => {
+                ProviderKind::Pi | ProviderKind::ChocoPi => {
+                    assert_eq!(has(&args, "--no-extensions"), provider == ProviderKind::Pi);
+                    assert!(has(&args, "--no-skills"));
+                    assert!(has(&args, "--no-prompt-templates"));
+                    assert!(has(&args, "--no-context-files"));
+                    assert!(has(&args, "--no-approve"));
                     assert!(has(&args, "--print"));
                     assert!(has(&args, "--no-session"));
                     assert!(has(&args, "--no-tools"));

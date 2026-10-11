@@ -549,7 +549,11 @@ fn perform_provider_rewind(
                 .cursor;
             Ok((Some(cursor), None, None))
         }
-        ProviderKind::Codex | ProviderKind::DeepSeek | ProviderKind::OhMyPi | ProviderKind::Pi => {
+        ProviderKind::Codex
+        | ProviderKind::DeepSeek
+        | ProviderKind::OhMyPi
+        | ProviderKind::ChocoPi
+        | ProviderKind::Pi => {
             let mut prepared_driver = None;
             let driver = if let Some(driver) = request.driver.as_ref() {
                 driver.clone()
@@ -838,6 +842,22 @@ fn perform_response_fork(mut request: ResponseForkRequest) -> Result<PreparedRes
                     anyhow::bail!(tr!(
                         "errors.provider_session_file_unavailable",
                         provider = "Pi"
+                    ));
+                }
+                let (cursor, prepared_driver) = fork_response_with_driver(&mut request)?;
+                Ok((cursor, None, prepared_driver))
+            }
+            ProviderKind::ChocoPi => {
+                if !matches!(
+                    request.source.provider_cursor.as_ref(),
+                    Some(ProviderResumeCursor::ChocoPi {
+                        session_file: Some(_),
+                        ..
+                    })
+                ) {
+                    anyhow::bail!(tr!(
+                        "errors.provider_session_file_unavailable",
+                        provider = "choco-pi"
                     ));
                 }
                 let (cursor, prepared_driver) = fork_response_with_driver(&mut request)?;
@@ -1889,7 +1909,11 @@ impl Waku {
         }
         let driver_start = if matches!(
             provider,
-            ProviderKind::Codex | ProviderKind::DeepSeek | ProviderKind::OhMyPi | ProviderKind::Pi
+            ProviderKind::Codex
+                | ProviderKind::DeepSeek
+                | ProviderKind::OhMyPi
+                | ProviderKind::ChocoPi
+                | ProviderKind::Pi
         ) && driver.is_none()
         {
             match self.driver_start_request_for_session(&source, source_workspace_path.clone()) {
@@ -1953,7 +1977,10 @@ impl Waku {
         } = match result {
             Ok(prepared) => prepared,
             Err(error) => {
-                if matches!(provider, ProviderKind::Pi | ProviderKind::OhMyPi) {
+                if matches!(
+                    provider,
+                    ProviderKind::Pi | ProviderKind::ChocoPi | ProviderKind::OhMyPi
+                ) {
                     // A failed restore after one of these creates a fork can
                     // leave the resident RPC process on that fork. Recreate it
                     // lazily from the source cursor on its next prompt.
@@ -2265,6 +2292,7 @@ impl Waku {
                 ProviderKind::Codex
                     | ProviderKind::DeepSeek
                     | ProviderKind::OhMyPi
+                    | ProviderKind::ChocoPi
                     | ProviderKind::Pi
             )
             && driver.is_none()

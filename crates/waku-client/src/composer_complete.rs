@@ -250,7 +250,11 @@ pub fn resolved_skill_submission(
 ) -> Option<String> {
     if !matches!(
         provider,
-        ProviderKind::Codex | ProviderKind::Fx | ProviderKind::Pi | ProviderKind::OhMyPi
+        ProviderKind::Codex
+            | ProviderKind::Fx
+            | ProviderKind::Pi
+            | ProviderKind::OhMyPi
+            | ProviderKind::ChocoPi
     ) {
         return None;
     }
@@ -266,7 +270,9 @@ pub fn resolved_skill_submission(
     }
     Some(match provider {
         ProviderKind::Codex | ProviderKind::Fx => format!("${invocation}"),
-        ProviderKind::Pi | ProviderKind::OhMyPi => format!("/skill:{invocation}"),
+        ProviderKind::Pi | ProviderKind::OhMyPi | ProviderKind::ChocoPi => {
+            format!("/skill:{invocation}")
+        }
         _ => unreachable!("non-native skill providers returned above"),
     })
 }
@@ -502,7 +508,11 @@ mod tests {
 
     #[test]
     fn pi_skill_submission_uses_the_skill_command() {
-        for provider in [ProviderKind::Pi, ProviderKind::OhMyPi] {
+        for provider in [
+            ProviderKind::Pi,
+            ProviderKind::OhMyPi,
+            ProviderKind::ChocoPi,
+        ] {
             for name in ["to-spec", "to-tickets"] {
                 let skill = command(name, CommandScope::Skill);
                 let expected = format!("/skill:{name} carefully");

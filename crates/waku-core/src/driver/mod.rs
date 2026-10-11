@@ -10,6 +10,7 @@ mod deepseek;
 mod opencode;
 mod opencode_computer_use;
 mod pi;
+mod pi_host_bridge;
 mod support;
 mod title_refresh;
 
@@ -222,6 +223,9 @@ pub(crate) fn start_local(
         ProviderKind::Pi => Arc::new(pi::PiDriver::start(pi::PiFlavor::Pi, options, events)?),
         ProviderKind::OhMyPi => {
             Arc::new(pi::PiDriver::start(pi::PiFlavor::OhMyPi, options, events)?)
+        }
+        ProviderKind::ChocoPi => {
+            Arc::new(pi::PiDriver::start(pi::PiFlavor::ChocoPi, options, events)?)
         }
         // Cursor, Fx, Grok, and Kimi Code all serve a long-lived ACP session,
         // which is the only way their Supervised mode can actually ask the user

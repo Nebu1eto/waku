@@ -335,6 +335,7 @@ const PROVIDER_ICONS: Record<ProviderKind, string> = {
   grok: 'i-waku-provider-grok',
   kimi: 'i-waku-provider-kimi',
   ohMyPi: 'i-waku-provider-ohmypi',
+  chocoPi: 'i-waku-provider-chocopi',
   pi: 'i-waku-provider-pi',
 }
 
@@ -354,6 +355,7 @@ export const PROVIDERS: Array<{
   { id: 'grok', name: 'Grok Build', shortName: 'Grok', command: 'grok' },
   { id: 'kimi', name: 'Kimi Code', shortName: 'Kimi', command: 'kimi' },
   { id: 'ohMyPi', name: 'Oh My Pi', shortName: 'Oh My Pi', command: 'omp' },
+  { id: 'chocoPi', name: 'choco-pi', shortName: 'choco-pi', command: 'pi' },
   { id: 'pi', name: 'Pi', shortName: 'Pi', command: 'pi' },
 ]
 

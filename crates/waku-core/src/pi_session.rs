@@ -269,6 +269,10 @@ fn summary_from_session(
             session_id: session.session_id.clone(),
             session_file: Some(path.to_path_buf()),
         },
+        ProviderKind::ChocoPi => ProviderResumeCursor::ChocoPi {
+            session_id: session.session_id.clone(),
+            session_file: Some(path.to_path_buf()),
+        },
         ProviderKind::OhMyPi => ProviderResumeCursor::OhMyPi {
             session_id: session.session_id.clone(),
             session_file: Some(path.to_path_buf()),
@@ -284,23 +288,35 @@ fn summary_from_session(
     })
 }
 
+fn expand_home(home: &Path, path: PathBuf) -> PathBuf {
+    if path == Path::new("~") {
+        return home.to_path_buf();
+    }
+    path.strip_prefix("~")
+        .ok()
+        .map(|suffix| home.join(suffix))
+        .unwrap_or(path)
+}
+
+fn configured_agent_dir(home: &Path) -> Option<PathBuf> {
+    std::env::var_os("PI_CODING_AGENT_DIR")
+        .filter(|value| !value.is_empty())
+        .map(|value| expand_home(home, PathBuf::from(value)))
+}
+
+/// Pi's agent directory: `PI_CODING_AGENT_DIR` or `~/.pi/agent`. choco-pi's
+/// installer follows the same rule when it writes its profile marker.
+pub(crate) fn pi_agent_dir() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    Some(configured_agent_dir(&home).unwrap_or_else(|| home.join(".pi/agent")))
+}
+
 fn session_roots(provider: ProviderKind) -> anyhow::Result<Vec<PathBuf>> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("home directory could not be located"))?;
-    let expand_home = |path: PathBuf| {
-        if path == Path::new("~") {
-            return home.clone();
-        }
-        path.strip_prefix("~")
-            .ok()
-            .map(|suffix| home.join(suffix))
-            .unwrap_or(path)
-    };
-    let configured_agent = std::env::var_os("PI_CODING_AGENT_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .map(&expand_home);
+    let expand_home = |path: PathBuf| expand_home(&home, path);
+    let configured_agent = configured_agent_dir(&home);
     match provider {
-        ProviderKind::Pi => {
+        ProviderKind::Pi | ProviderKind::ChocoPi => {
             if let Some(path) =
                 std::env::var_os("PI_CODING_AGENT_SESSION_DIR").filter(|value| !value.is_empty())
             {
@@ -512,6 +528,88 @@ mod tests {
                 .all(|message| message.content != "abandoned")
         );
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn chocopi_host_bridge_tail_preserves_active_messages_and_history() {
+        let header = serde_json::json!({"type":"session","version":3,"id":"bridge-session","cwd":std::env::temp_dir()}).to_string();
+        let user = r#"{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"question"}}"#;
+        let answer = r#"{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":"answer","stopReason":"stop"}}"#;
+        let abandoned = r#"{"type":"message","id":"other","parentId":"u1","message":{"role":"assistant","content":"abandoned"}}"#;
+        let path = write_session(&[&header, user, abandoned, answer]);
+        let baseline = parse_session(&path).unwrap();
+        let history = history_from_session(ProviderKind::ChocoPi, &baseline);
+        let bridge = r#"{"type":"custom","id":"bridge1","parentId":"a1","customType":"choco-pi:host-bridge/subagent","data":{"schema":1,"event":"completed","live":[]}}"#;
+        let bridge2 = r#"{"type":"custom","id":"bridge2","parentId":"bridge1","customType":"choco-pi:host-bridge/subagent","data":{"schema":1,"event":"lost","live":[]}}"#;
+        fs::write(
+            &path,
+            [&header, user, abandoned, answer, bridge, bridge2].join("\n"),
+        )
+        .unwrap();
+        let session = parse_session(&path).unwrap();
+        let chain = active_chain(&session, ProviderKind::ChocoPi);
+        assert_eq!(
+            chain
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["u1", "a1", "bridge1", "bridge2"]
+        );
+        assert_eq!(
+            chain
+                .iter()
+                .filter(|entry| entry.kind == "message")
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            active_chain(&baseline, ProviderKind::ChocoPi)
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        let after = history_from_session(ProviderKind::ChocoPi, &session);
+        assert_eq!(
+            after
+                .messages
+                .iter()
+                .map(|message| (&message.role, &message.content, message.created_at))
+                .collect::<Vec<_>>(),
+            history
+                .messages
+                .iter()
+                .map(|message| (&message.role, &message.content, message.created_at))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            after
+                .turns
+                .iter()
+                .map(|turn| (
+                    turn.turn_count,
+                    &turn.status,
+                    turn.started_at,
+                    turn.completed_at
+                ))
+                .collect::<Vec<_>>(),
+            history
+                .turns
+                .iter()
+                .map(|turn| (
+                    turn.turn_count,
+                    &turn.status,
+                    turn.started_at,
+                    turn.completed_at
+                ))
+                .collect::<Vec<_>>()
+        );
+        let summary = summary_from_session(ProviderKind::ChocoPi, &path, &session).unwrap();
+        assert!(
+            matches!(summary.cursor, ProviderResumeCursor::ChocoPi { session_id, session_file: Some(file) } if session_id == "bridge-session" && file == path)
+        );
+        assert_eq!(
+            session_roots(ProviderKind::ChocoPi).unwrap(),
+            session_roots(ProviderKind::Pi).unwrap()
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

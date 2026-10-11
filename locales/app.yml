@@ -380,6 +380,8 @@ settings.share_anonymous_usage_data:
 settings.share_anonymous_usage_data_description:
   en: Help improve Waku by sharing feature usage and reliability data. Prompts, responses, project names, file paths, and other personal data are never included
 
+providers.chocopi_description:
+  en: "Detected via the pi executable and ~/.pi/agent/choco-pi/profile.json (or PI_CODING_AGENT_DIR). Plain Pi is hidden while the marker is valid, unless a Pi executable override is set."
 providers.coding_agents:
   en: Coding agents
 providers.description:

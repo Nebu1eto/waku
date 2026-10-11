@@ -17,6 +17,8 @@ use waku_protocol::composer::{CommandScope, SlashCommand};
 use waku_protocol::model::ProviderKind;
 
 const CLI_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+// ChocoPi package loading measured 9.4 s; allow the Pi handshake budget.
+const PI_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
 const COMMAND_CATALOG_CAP: usize = 500;
 
@@ -35,7 +37,7 @@ pub(crate) fn discover(
         ProviderKind::Codex => discover_codex(binary, project_root),
         ProviderKind::OpenCode => discover_opencode(binary, project_root),
         ProviderKind::OhMyPi => discover_oh_my_pi(binary, project_root),
-        ProviderKind::Pi => discover_pi(binary, project_root),
+        ProviderKind::Pi | ProviderKind::ChocoPi => discover_pi(binary, project_root),
         // ACP advertises commands only after session/new. Harness likewise
         // requires an agent id for commands/list. Creating throwaway sessions
         // merely to seed autocomplete would pollute provider history, so their
@@ -157,7 +159,7 @@ fn discover_pi(binary: &Path, project_root: &Path) -> Option<Vec<SlashCommand>> 
         &["--mode", "rpc", "--no-session", "--offline"],
         project_root,
         input.as_bytes(),
-        CLI_PROBE_TIMEOUT,
+        PI_PROBE_TIMEOUT,
         |value| {
             value.get("id").and_then(Value::as_str) == Some("waku-command-catalog")
                 && value.get("success").and_then(Value::as_bool) == Some(true)

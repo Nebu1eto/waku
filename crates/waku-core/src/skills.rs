@@ -88,6 +88,10 @@ pub fn user_skill_locations() -> Vec<SkillLocation> {
         home_join(".pi/agent/skills"),
     );
     push(
+        SkillSource::Provider(ProviderKind::ChocoPi),
+        home_join(".pi/agent/skills"),
+    );
+    push(
         SkillSource::Provider(ProviderKind::OhMyPi),
         home_join(".omp/agent/skills"),
     );
@@ -117,6 +121,7 @@ pub fn project_skill_locations(project_root: &Path, project_name: &str) -> Vec<S
         ),
         (SkillSource::Provider(ProviderKind::Fx), "skills"),
         (SkillSource::Provider(ProviderKind::Pi), ".pi/skills"),
+        (SkillSource::Provider(ProviderKind::ChocoPi), ".pi/skills"),
         (SkillSource::Provider(ProviderKind::OhMyPi), ".omp/skills"),
     ]
     .into_iter()
@@ -139,6 +144,20 @@ pub fn skill_locations(projects: &[(String, PathBuf)]) -> Vec<SkillLocation> {
     locations
 }
 
+fn checkout_skill_locations(
+    profile: &crate::choco_pi_profile::ChocoPiProfile,
+) -> Vec<SkillLocation> {
+    crate::choco_pi_profile::checkout_skill_roots(profile)
+        .into_iter()
+        .map(|root| SkillLocation {
+            source: SkillSource::Provider(ProviderKind::ChocoPi),
+            scope: SkillScope::User,
+            root,
+            project: None,
+        })
+        .collect()
+}
+
 /// One skill directory as found on disk, before grouping.
 struct RawSkill {
     name: String,
@@ -156,8 +175,18 @@ struct RawSkill {
 /// Walk every location and build the catalog. Filesystem work throughout —
 /// background executor only.
 pub fn scan_skills(locations: &[SkillLocation]) -> SkillsCatalog {
+    // Location builders are reached from frames; marker reads and package
+    // walks belong here, on the background scan instead.
+    let mut locations = locations.to_vec();
+    if locations
+        .iter()
+        .any(|location| location.source == SkillSource::Provider(ProviderKind::ChocoPi))
+        && let Some(profile) = crate::choco_pi_profile::read_profile()
+    {
+        locations.extend(checkout_skill_locations(&profile));
+    }
     let mut raw = Vec::new();
-    for location in locations {
+    for location in &locations {
         scan_location(location, &mut raw);
         if raw.len() >= SCAN_CAP {
             break;
@@ -463,6 +492,67 @@ mod tests {
         assert!(!dormant.enabled);
         assert_eq!(catalog.disabled_count(), 1);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn chocopi_locations_include_pi_and_checkout_package_skills() {
+        let root = temp_root("chocopi-roots");
+        let checkout_skills = root.join(".pi/skills");
+        let package_skills = root.join(".pi/packages/example/skills");
+        write_skill(
+            &checkout_skills,
+            "checkout-skill",
+            "---\nname: checkout-skill\n---\nBody",
+        );
+        write_skill(
+            &package_skills,
+            "package-skill",
+            "---\nname: package-skill\n---\nBody",
+        );
+        let profile = crate::choco_pi_profile::parse_profile(
+            serde_json::json!({"schema":1,"checkout":root})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+        let locations = checkout_skill_locations(&profile);
+        assert_eq!(locations.len(), 2);
+        assert_eq!(locations[0].root, checkout_skills);
+        assert_eq!(locations[1].root, package_skills);
+        assert!(locations.iter().all(|location| location.source
+            == SkillSource::Provider(ProviderKind::ChocoPi)
+            && location.scope == SkillScope::User));
+        let project = project_skill_locations(&root, "project");
+        let pi = project
+            .iter()
+            .find(|location| location.source == SkillSource::Provider(ProviderKind::Pi))
+            .unwrap();
+        let choco = project
+            .iter()
+            .find(|location| location.source == SkillSource::Provider(ProviderKind::ChocoPi))
+            .unwrap();
+        assert_eq!(pi.root, choco.root);
+        let user = user_skill_locations();
+        assert_eq!(
+            user.iter()
+                .find(|location| location.source == SkillSource::Provider(ProviderKind::Pi))
+                .unwrap()
+                .root,
+            user.iter()
+                .find(|location| location.source == SkillSource::Provider(ProviderKind::ChocoPi))
+                .unwrap()
+                .root
+        );
+        // Scan individual roots without reading a machine's real profile.
+        let scan_locations = locations
+            .into_iter()
+            .map(|mut location| {
+                location.source = SkillSource::Shared;
+                location
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(scan_skills(&scan_locations).skills.len(), 2);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -70,6 +70,26 @@ describe('composer preferences', () => {
     expect(readComposerPreferences(storage, 'ws://first').lastProvider).toBe('fx')
   })
 
+  test('restores choco-pi as a distinct remembered provider with model traits', () => {
+    const storage = memoryStorage()
+    const preferences = rememberComposerSession(
+      readComposerPreferences(storage, 'ws://first'),
+      {
+        provider: 'chocoPi',
+        model: 'openai-codex/gpt-6.1-sol',
+        reasoning_effort: 'high',
+        service_tier: null,
+      },
+    )
+    writeComposerPreferences(storage, 'ws://first', preferences)
+
+    const restored = readComposerPreferences(storage, 'ws://first')
+    expect(restored.lastProvider).toBe('chocoPi')
+    expect(rememberedModelTraits(restored, 'chocoPi', 'openai-codex/gpt-6.1-sol'))
+      .toMatchObject({ reasoningEffort: 'high' })
+    expect(rememberedModelTraits(restored, 'pi', 'openai-codex/gpt-6.1-sol')).toBeUndefined()
+  })
+
   test('carries preferences saved for the OpenCode 2 beta over to OpenCode', () => {
     const storage = memoryStorage()
     storage.setItem('waku.composer-preferences.v1', JSON.stringify({

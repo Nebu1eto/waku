@@ -188,6 +188,7 @@ settings.share_anonymous_usage_data: 分享匿名使用数据
 settings.share_anonymous_usage_data_description: 分享功能使用情况和可靠性数据，帮助改进 Waku。不会包含提示词、回复、项目名称、文件路径等个人信息
 providers.coding_agents: 编程智能体
 providers.description: Waku 调用安装在这台电脑上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
+providers.chocopi_description: "通过 pi 可执行文件和 ~/.pi/agent/choco-pi/profile.json（或 PI_CODING_AGENT_DIR）检测。标记有效时隐藏普通 Pi，但显式指定 Pi 可执行文件路径时除外。"
 providers.web_description: Waku 调用安装在守护进程主机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
 providers.check_failed: "无法检查 %{command}：%{error}"
 providers.show_settings: 显示 %{provider} 设置

@@ -220,7 +220,7 @@ export function expandedComposerSubmission(
   const skill = commands.find((item) => item.name === name && item.scope === 'Skill')
   if (skill) {
     if (provider === 'codex' || provider === 'fx') return `$${invocation}`
-    if (provider === 'pi' || provider === 'ohMyPi') return `/skill:${invocation}`
+    if (provider === 'pi' || provider === 'ohMyPi' || provider === 'chocoPi') return `/skill:${invocation}`
   }
   const command = commands.find((item) => item.name === name && item.template !== null)
   return command?.template === null || command?.template === undefined

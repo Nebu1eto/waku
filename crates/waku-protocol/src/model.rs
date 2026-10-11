@@ -25,11 +25,14 @@ pub enum ProviderKind {
     Grok,
     Kimi,
     OhMyPi,
+    /// Pi running the choco-pi agent profile. Detected by the profile marker
+    /// under the Pi agent directory; launches the same `pi` binary.
+    ChocoPi,
     Pi,
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Amp,
         Self::Claude,
         Self::Codex,
@@ -40,6 +43,7 @@ impl ProviderKind {
         Self::Grok,
         Self::Kimi,
         Self::OhMyPi,
+        Self::ChocoPi,
         Self::Pi,
     ];
 
@@ -55,6 +59,7 @@ impl ProviderKind {
             Self::Grok => "grok",
             Self::Kimi => "kimi",
             Self::OhMyPi => "ohmypi",
+            Self::ChocoPi => "chocopi",
             Self::Pi => "pi",
         }
     }
@@ -71,6 +76,7 @@ impl ProviderKind {
             Self::Grok => "Grok Build",
             Self::Kimi => "Kimi Code",
             Self::OhMyPi => "Oh My Pi",
+            Self::ChocoPi => "choco-pi",
             Self::Pi => "Pi",
         }
     }
@@ -87,6 +93,7 @@ impl ProviderKind {
             Self::Grok => "Grok",
             Self::Kimi => "Kimi",
             Self::OhMyPi => "Oh My Pi",
+            Self::ChocoPi => "choco-pi",
             Self::Pi => "Pi",
         }
     }
@@ -105,6 +112,7 @@ impl ProviderKind {
             Self::Grok => "grok",
             Self::Kimi => "kimi",
             Self::OhMyPi => "omp",
+            Self::ChocoPi => "pi",
             Self::Pi => "pi",
         }
     }
@@ -125,6 +133,7 @@ impl ProviderKind {
                 | Self::OpenCode
                 | Self::Grok
                 | Self::OhMyPi
+                | Self::ChocoPi
                 | Self::Pi
         )
     }
@@ -140,6 +149,7 @@ impl ProviderKind {
                 | Self::OpenCode
                 | Self::Grok
                 | Self::OhMyPi
+                | Self::ChocoPi
                 | Self::Pi
         )
     }
@@ -156,6 +166,7 @@ impl ProviderKind {
                 | Self::Grok
                 | Self::Kimi
                 | Self::OhMyPi
+                | Self::ChocoPi
                 | Self::Pi
         )
     }
@@ -212,6 +223,13 @@ pub enum ProviderResumeCursor {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_file: Option<PathBuf>,
     },
+    /// Kept apart from `Pi` so the plain Pi driver never opens a choco-pi
+    /// session and drops its host-bridge entries.
+    ChocoPi {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_file: Option<PathBuf>,
+    },
     Pi {
         session_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,6 +265,10 @@ impl ProviderResumeCursor {
                 session_id: id,
                 session_file: None,
             },
+            ProviderKind::ChocoPi => Self::ChocoPi {
+                session_id: id,
+                session_file: None,
+            },
             ProviderKind::Pi => Self::Pi {
                 session_id: id,
                 session_file: None,
@@ -266,6 +288,7 @@ impl ProviderResumeCursor {
             Self::Grok { .. } => ProviderKind::Grok,
             Self::Kimi { .. } => ProviderKind::Kimi,
             Self::OhMyPi { .. } => ProviderKind::OhMyPi,
+            Self::ChocoPi { .. } => ProviderKind::ChocoPi,
             Self::Pi { .. } => ProviderKind::Pi,
         }
     }
@@ -281,6 +304,7 @@ impl ProviderResumeCursor {
             | Self::Grok { session_id }
             | Self::Kimi { session_id }
             | Self::OhMyPi { session_id, .. }
+            | Self::ChocoPi { session_id, .. }
             | Self::Pi { session_id, .. } => session_id,
             Self::Codex { thread_id } => thread_id,
         }
@@ -1762,6 +1786,8 @@ impl ActivityKind {
             compact.as_str(),
             "bash"
                 | "command"
+                | "exec"
+                | "execcommand"
                 | "execute"
                 | "executecommand"
                 | "commandexecution"
@@ -1769,7 +1795,11 @@ impl ActivityKind {
                 | "runterminalcommand"
                 | "shell"
                 | "shellcommand"
+                | "shellread"
+                | "shellstart"
+                | "shellstop"
                 | "terminal"
+                | "writestdin"
         ) {
             Self::Command
         } else if matches!(
@@ -1799,12 +1829,19 @@ impl ActivityKind {
             Self::FileChange
         } else if matches!(
             compact.as_str(),
-            "read" | "fileread" | "readfile" | "readtextfile" | "viewfile"
+            "read"
+                | "fileread"
+                | "readenclosing"
+                | "readfile"
+                | "readsymbol"
+                | "readtextfile"
+                | "viewfile"
         ) {
             Self::FileRead
         } else if matches!(
             compact.as_str(),
             "filesearch"
+                | "astgrepsearch"
                 | "find"
                 | "findfiles"
                 | "glob"
@@ -1812,6 +1849,7 @@ impl ActivityKind {
                 | "ripgrep"
                 | "searchfiles"
                 | "searchinfiles"
+                | "symbolsearch"
         ) {
             Self::FileSearch
         } else if matches!(
@@ -1827,7 +1865,7 @@ impl ActivityKind {
             Self::FileList
         } else if matches!(
             compact.as_str(),
-            "search" | "searchtool" | "webfetch" | "websearch"
+            "search" | "fetchcontent" | "searchtool" | "sourcecheck" | "webfetch" | "websearch"
         ) {
             Self::Search
         } else {
@@ -3636,6 +3674,40 @@ mod tests {
     }
 
     #[test]
+    fn choco_pi_tool_names_are_classified() {
+        for (names, kind) in [
+            (
+                &[
+                    "exec",
+                    "exec_command",
+                    "write_stdin",
+                    "shell_start",
+                    "shell_read",
+                    "shell_stop",
+                ][..],
+                ActivityKind::Command,
+            ),
+            (
+                &["read_symbol", "read_enclosing"][..],
+                ActivityKind::FileRead,
+            ),
+            (
+                &["symbol_search", "ast_grep_search"][..],
+                ActivityKind::FileSearch,
+            ),
+            (&["fetch_content", "source_check"][..], ActivityKind::Search),
+            (
+                &["Agent", "shell_list", "TaskCreate"][..],
+                ActivityKind::Tool,
+            ),
+        ] {
+            for name in names {
+                assert_eq!(ActivityKind::from_tool_name(name), kind, "{name}");
+            }
+        }
+    }
+
+    #[test]
     fn fallback_tool_names_are_not_treated_as_generic_titles() {
         assert!(!is_generic_activity_title(
             ActivityKind::Tool,
@@ -4248,7 +4320,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_provider_kind() {
-        assert_eq!(ProviderKind::ALL.len(), 11);
+        assert_eq!(ProviderKind::ALL.len(), 12);
         let ids: std::collections::HashSet<_> =
             ProviderKind::ALL.iter().map(|kind| kind.id()).collect();
         assert_eq!(
@@ -4256,13 +4328,17 @@ mod tests {
             ProviderKind::ALL.len(),
             "duplicate ProviderKind::id()"
         );
+        // choco-pi is a Pi profile and launches the same binary; the profile
+        // marker, not the command, tells the two apart. No other pair shares.
+        assert_eq!(ProviderKind::ChocoPi.command(), ProviderKind::Pi.command());
         let commands: std::collections::HashSet<_> = ProviderKind::ALL
             .iter()
+            .filter(|kind| **kind != ProviderKind::ChocoPi)
             .map(|kind| kind.command())
             .collect();
         assert_eq!(
             commands.len(),
-            ProviderKind::ALL.len(),
+            ProviderKind::ALL.len() - 1,
             "duplicate ProviderKind::command()"
         );
     }

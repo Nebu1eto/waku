@@ -196,6 +196,7 @@ settings.share_anonymous_usage_data_description: 機能の利用状況と信頼�
 
 providers.coding_agents: コーディングエージェント
 providers.description: Waku はこのコンピュータにインストールされたエージェントの CLI を使用します。各エージェントの CLI をインストールするかログインしてから、更新してください
+providers.chocopi_description: "pi 実行ファイルと ~/.pi/agent/choco-pi/profile.json（または PI_CODING_AGENT_DIR）で検出します。マーカーが有効な間は通常の Pi は非表示になりますが、Pi 実行ファイルのパスを指定した場合は表示されます。"
 providers.web_description: Waku はデーモンホストにインストールされたエージェント CLI を使用します。各エージェントの CLI をインストールするかログインしてから、更新してください
 providers.check_failed: "%{command} を確認できませんでした：%{error}"
 providers.show_settings: "%{provider} の設定を表示"

@@ -1,0 +1,7 @@
+{"type":"extension_ui_request","id":"79a3b55c-2199-4cd8-a90a-941b2f1ee579","method":"select","title":"Reasoning effort","options":["low","medium (current)","high","xhigh","max"]}
+{"type":"extension_ui_request","id":"confirm-1","method":"confirm","title":"Restore files?","message":"Rewind restores 3 files to the checkpoint."}
+{"type":"extension_ui_request","id":"input-1","method":"input","title":"Session name","placeholder":"untitled"}
+{"type":"extension_ui_request","id":"editor-1","method":"editor","title":"Edit the plan","prefill":"1. Probe"}
+{"type":"extension_ui_request","id":"86cb3adb-f209-4a1d-896b-ef17e192f8bc","method":"notify","message":"Reasoning effort: low","notifyType":"info"}
+{"type":"extension_ui_request","id":"notify-error","method":"notify","message":"MCP server figma failed to start","notifyType":"error"}
+{"type":"extension_ui_request","id":"widget-1","method":"setWidget","widgetKey":"zentui","widgetLines":["x"]}

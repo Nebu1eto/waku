@@ -1777,7 +1777,17 @@ impl Waku {
                                 .text_size(sp(12.5))
                                 .text_color(theme.text_tertiary)
                                 .child(detail),
-                        ),
+                        )
+                        .when(kind == ProviderKind::ChocoPi, |element| {
+                            element.child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(sp(12.5))
+                                    .line_height(sp(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("providers.chocopi_description")),
+                            )
+                        }),
                 )
                 .child(expand_button)
                 .when(installed, |element| element.child(toggle));

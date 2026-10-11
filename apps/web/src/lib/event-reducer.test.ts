@@ -269,6 +269,33 @@ describe('thread goals', () => {
     expect(woken.turns[0]?.provider_turn_started).toBe(true)
   })
 
+  test('choco-pi background completions get a new transcript turn without a user message', () => {
+    const idle: AgentSession = {
+      ...runningSession(),
+      provider: 'chocoPi',
+      status: 'idle',
+      messages: [],
+      turns: [],
+    }
+    const woken = apply(idle, 'turnStarted', null)
+    const streaming = apply(woken, 'textDelta', 'Background work finished')
+    expect(streaming.status).toBe('working')
+    expect(streaming.turns).toHaveLength(1)
+    expect(streaming.turns[0]?.provider_turn_started).toBe(true)
+    expect(streaming.messages).toHaveLength(1)
+    expect(streaming.messages[0]?.role).toBe('assistant')
+    expect(streaming.messages[0]?.content).toBe('Background work finished')
+    const settled = apply(streaming, 'turnFinished', { success: true, summary: null })
+    expect(settled.status).toBe('idle')
+    expect(settled.turns).toHaveLength(1)
+    const next = apply(settled, 'turnStarted', null)
+    expect(next.turns).toHaveLength(2)
+    expect(apply(next, 'turnStarted', null).turns).toHaveLength(2)
+
+    expect(apply({ ...idle, provider: 'pi' }, 'turnStarted', null).turns).toHaveLength(0)
+    expect(apply({ ...idle, provider: 'ohMyPi' }, 'turnStarted', null).turns).toHaveLength(0)
+  })
+
   test('unsolicited turns belong to self-waking providers and never preempt an active turn', () => {
     const amp: AgentSession = {
       ...runningSession(),

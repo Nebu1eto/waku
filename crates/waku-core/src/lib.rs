@@ -22,6 +22,7 @@ pub mod amp_session;
 pub mod attachments;
 pub mod blob_store;
 pub mod checkpoint;
+pub mod choco_pi_profile;
 mod claude_metadata;
 pub mod claude_session;
 pub mod codex_session;

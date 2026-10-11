@@ -134,13 +134,11 @@ pub fn discover_slash_commands(
     project_root: &Path,
     binary_override: Option<&str>,
 ) -> Vec<SlashCommand> {
-    let cli_commands = match binary_override {
-        Some(binary) => crate::command_env::resolve_binary_override(binary),
-        None => crate::command_env::find_executable(provider.command()),
-    }
-    .as_deref()
-    .and_then(|binary| crate::slash_command_catalog::discover(provider, binary, project_root))
-    .unwrap_or_default();
+    let cli_commands = crate::model::provider_probe(provider, binary_override)
+        .path
+        .as_deref()
+        .and_then(|binary| crate::slash_command_catalog::discover(provider, binary, project_root))
+        .unwrap_or_default();
     assemble_slash_commands(provider, project_root, cli_commands)
 }
 
@@ -277,7 +275,7 @@ fn assemble_slash_commands(
                 scan_skill_files(provider, &home.join(".claw/skills"), &mut commands);
             }
         }
-        ProviderKind::Pi => {
+        ProviderKind::Pi | ProviderKind::ChocoPi => {
             scan_command_files(
                 &project_root.join(".pi/prompts"),
                 CommandScope::Project,
@@ -293,6 +291,19 @@ fn assemble_slash_commands(
                     &mut commands,
                 );
                 scan_skill_files(provider, &home.join(".pi/agent/skills"), &mut commands);
+            }
+            if provider == ProviderKind::ChocoPi
+                && let Some(profile) = crate::choco_pi_profile::read_profile()
+            {
+                scan_command_files(
+                    &profile.checkout.join(".pi/prompts"),
+                    CommandScope::User,
+                    true,
+                    &mut commands,
+                );
+                for root in crate::choco_pi_profile::checkout_skill_roots(&profile) {
+                    scan_skill_files(provider, &root, &mut commands);
+                }
             }
         }
         ProviderKind::OhMyPi => {
@@ -674,7 +685,11 @@ pub fn resolved_skill_submission(
 ) -> Option<String> {
     if !matches!(
         provider,
-        ProviderKind::Codex | ProviderKind::Fx | ProviderKind::Pi | ProviderKind::OhMyPi
+        ProviderKind::Codex
+            | ProviderKind::Fx
+            | ProviderKind::Pi
+            | ProviderKind::ChocoPi
+            | ProviderKind::OhMyPi
     ) {
         return None;
     }
@@ -691,7 +706,9 @@ pub fn resolved_skill_submission(
     }
     Some(match provider {
         ProviderKind::Codex | ProviderKind::Fx => format!("${invocation}"),
-        ProviderKind::Pi | ProviderKind::OhMyPi => format!("/skill:{invocation}"),
+        ProviderKind::Pi | ProviderKind::ChocoPi | ProviderKind::OhMyPi => {
+            format!("/skill:{invocation}")
+        }
         _ => unreachable!("non-native skill providers returned above"),
     })
 }

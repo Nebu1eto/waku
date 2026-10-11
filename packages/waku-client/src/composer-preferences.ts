@@ -39,6 +39,7 @@ const PROVIDERS = new Set<ProviderKind>([
   'grok',
   'kimi',
   'ohMyPi',
+  'chocoPi',
   'pi',
 ])
 

@@ -1452,6 +1452,7 @@ function providerName(provider: AgentSession['provider']) {
       grok: 'Grok',
       kimi: 'Kimi',
       ohMyPi: 'Oh My Pi',
+      chocoPi: 'choco-pi',
       pi: 'Pi',
     } as const
   )[provider]

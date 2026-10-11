@@ -180,6 +180,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "provider-ohmypi",
     "provider-opencode",
     "provider-pi",
+    "provider-chocopi",
     "queue",
     "regex",
     "replace",

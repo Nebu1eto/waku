@@ -502,8 +502,8 @@ impl Backend for WakuBackend {
                     .provider_binary_overrides
                     .get(&provider)
                     .map(String::as_str);
-                let Some(binary) = crate::model::provider_probe(provider, binary_override).path
-                else {
+                let probe = crate::model::provider_probe(provider, binary_override);
+                let Some(binary) = probe.path.filter(|_| probe.installed) else {
                     return Ok(ResponsePayload::ProviderSessions {
                         sessions: Vec::new(),
                     });
@@ -530,7 +530,7 @@ impl Backend for WakuBackend {
                     }
                     ProviderKind::Grok => crate::grok_session::list_provider_sessions(limit)?,
                     ProviderKind::Kimi => crate::kimi_session::list_provider_sessions(limit)?,
-                    ProviderKind::OhMyPi | ProviderKind::Pi => {
+                    ProviderKind::OhMyPi | ProviderKind::ChocoPi | ProviderKind::Pi => {
                         crate::pi_session::list_provider_sessions(provider, limit)?
                     }
                 };
@@ -620,6 +620,10 @@ impl Backend for WakuBackend {
                         session_file,
                     }
                     | ProviderResumeCursor::Pi {
+                        session_id,
+                        session_file,
+                    }
+                    | ProviderResumeCursor::ChocoPi {
                         session_id,
                         session_file,
                     } => {
@@ -1219,6 +1223,7 @@ impl WakuBackend {
             ProviderKind::Codex
             | ProviderKind::DeepSeek
             | ProviderKind::OhMyPi
+            | ProviderKind::ChocoPi
             | ProviderKind::Pi => Ok((
                 self.fork_response_with_driver(source, cwd, turns_to_remove)?,
                 HashMap::new(),
@@ -1329,6 +1334,17 @@ impl WakuBackend {
                 ) =>
             {
                 bail!("Pi's native session file is unavailable");
+            }
+            ProviderKind::ChocoPi
+                if !matches!(
+                    source.provider_cursor.as_ref(),
+                    Some(ProviderResumeCursor::ChocoPi {
+                        session_file: Some(_),
+                        ..
+                    })
+                ) =>
+            {
+                bail!("choco-pi's native session file is unavailable");
             }
             ProviderKind::OhMyPi
                 if !matches!(
@@ -1472,6 +1488,7 @@ impl WakuBackend {
             ProviderKind::Codex
             | ProviderKind::DeepSeek
             | ProviderKind::OhMyPi
+            | ProviderKind::ChocoPi
             | ProviderKind::Pi => Ok((
                 self.rollback_response_with_driver(source, cwd, binary, rollback_turns)?,
                 HashMap::new(),
@@ -1532,8 +1549,10 @@ impl WakuBackend {
             .provider_binary_overrides
             .get(&provider)
             .map(String::as_str);
-        crate::model::provider_probe(provider, binary_override)
+        let probe = crate::model::provider_probe(provider, binary_override);
+        probe
             .path
+            .filter(|_| probe.installed)
             .ok_or_else(|| anyhow!("{} is not installed on the daemon", provider.display_name()))
     }
 }

@@ -111,13 +111,13 @@ export function reduceRuntimeEvent(
         turn.provider_turn_started = true
         session.status = 'working'
       } else if (
-        (session.provider === 'codex' || session.provider === 'claude')
+        (session.provider === 'codex' || session.provider === 'claude' || session.provider === 'chocoPi')
         && !['connecting', 'working', 'waiting', 'background'].includes(session.status)
       ) {
         // Some providers start turns on their own: Codex goal continuation
-        // pursues an active goal whenever the thread is idle, and Claude Code
-        // re-enters the model once a backgrounded command, subagent or monitor
-        // settles. Give the turn a transcript home — there is no user message
+        // pursues an active goal whenever the thread is idle; Claude Code and
+        // choco-pi re-enter after background work settles. Give the turn a
+        // transcript home — there is no user message
         // for it — so its work streams in instead of being dropped.
         session.turns.push({
           id: clock.randomUUID(),

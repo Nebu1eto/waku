@@ -372,6 +372,24 @@ describe('provider session resume', () => {
     })
   })
 
+  test('resumes choco-pi with its session file and keeps Pi cursors distinct', () => {
+    const cursor = {
+      provider: 'chocoPi',
+      sessionId: 'native-session',
+      sessionFile: '/srv/pi/sessions/native-session.jsonl',
+    } as const
+    const session = createResumedSession('project', { ...summary, cursor }, {
+      messages: [],
+      turns: [],
+    })
+    expect(session.provider).toBe('chocoPi')
+    expect(session.provider_cursor).toEqual(cursor)
+    expect(sameProviderSession(cursor, { ...cursor, sessionFile: null })).toBe(true)
+    expect(sameProviderSession(cursor, { ...cursor, provider: 'pi' })).toBe(false)
+    expect(sameProviderSession(cursor, { ...cursor, provider: 'ohMyPi' })).toBe(false)
+    expect(sameProviderSession(cursor, { ...cursor, sessionId: 'other' })).toBe(false)
+  })
+
   test('matches Claude replay cursors by provider and native ID', () => {
     expect(sameProviderSession(
       { provider: 'claude', sessionId: 'native-session' },
