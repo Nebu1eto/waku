@@ -33,6 +33,29 @@ struct ParsedSession {
     created_at: u64,
     updated_at: u64,
     entries: Vec<NativeEntry>,
+    /// A choco-pi subagent transcript; hidden from the resume picker.
+    is_subagent: bool,
+}
+
+/// choco-pi writes this custom entry when it spawns a subagent session.
+const CHOCO_PI_SUBAGENT_CUSTOM_TYPE: &str = "choco-pi:subagent";
+
+/// Heuristic backfill for subagent sessions written before choco-pi recorded
+/// [`CHOCO_PI_SUBAGENT_CUSTOM_TYPE`]: it mirrors choco-pi's `agent-runner.ts`
+/// naming `${name}#${agentId.slice(0, 8)}`, i.e. `^[A-Za-z0-9_.-]+#[0-9a-f]{8}$`.
+/// A user could pick such a name by hand, so this is a heuristic, not proof.
+fn is_subagent_session_name(name: &str) -> bool {
+    let Some((agent, id)) = name.split_once('#') else {
+        return false;
+    };
+    !agent.is_empty()
+        && agent
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+        && id.len() == 8
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn text_content(value: &Value) -> Option<String> {
@@ -98,6 +121,8 @@ fn parse_session(path: &Path) -> anyhow::Result<ParsedSession> {
     let mut created_at = 0;
     let mut updated_at = file_timestamp(path);
     let mut entries = Vec::new();
+    let mut has_subagent_marker = false;
+    let mut last_session_info_name: Option<String> = None;
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
@@ -107,6 +132,18 @@ fn parse_session(path: &Path) -> anyhow::Result<ParsedSession> {
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if kind == "custom"
+            && value.get("customType").and_then(Value::as_str)
+                == Some(CHOCO_PI_SUBAGENT_CUSTOM_TYPE)
+        {
+            has_subagent_marker = true;
+        }
+        if kind == "session_info" {
+            last_session_info_name = value
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| name.trim().to_owned());
+        }
         if kind == "title" {
             if let Some(value) = value
                 .get("title")
@@ -195,6 +232,10 @@ fn parse_session(path: &Path) -> anyhow::Result<ParsedSession> {
     } else {
         created_at
     };
+    let is_subagent = has_subagent_marker
+        || last_session_info_name
+            .as_deref()
+            .is_some_and(is_subagent_session_name);
     Ok(ParsedSession {
         session_id,
         cwd,
@@ -202,6 +243,7 @@ fn parse_session(path: &Path) -> anyhow::Result<ParsedSession> {
         created_at,
         updated_at: updated_at.max(created_at),
         entries,
+        is_subagent,
     })
 }
 
@@ -382,14 +424,31 @@ pub fn list_provider_sessions(
     provider: ProviderKind,
     limit: usize,
 ) -> anyhow::Result<Vec<ProviderSessionSummary>> {
+    Ok(list_provider_sessions_in(
+        provider,
+        &session_roots(provider)?,
+        limit,
+    ))
+}
+
+fn list_provider_sessions_in(
+    provider: ProviderKind,
+    roots: &[PathBuf],
+    limit: usize,
+) -> Vec<ProviderSessionSummary> {
     let mut seen = HashSet::new();
     let mut sessions = Vec::new();
-    for root in session_roots(provider)? {
-        for path in session_files(&root) {
+    for root in roots {
+        for path in session_files(root) {
             let Ok(parsed) = parse_session(&path) else {
                 continue;
             };
             if !seen.insert(parsed.session_id.clone()) {
+                continue;
+            }
+            // Subagent transcripts stay loadable by file but are not resumable
+            // user conversations.
+            if parsed.is_subagent {
                 continue;
             }
             if let Some(summary) = summary_from_session(provider, &path, &parsed) {
@@ -399,7 +458,7 @@ pub fn list_provider_sessions(
     }
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     sessions.truncate(limit);
-    Ok(sessions)
+    sessions
 }
 
 fn status_from_reason(reason: Option<&str>) -> TurnStatus {
@@ -636,5 +695,105 @@ mod tests {
         assert_eq!(history.turns.len(), 1);
         assert_eq!(history.messages[0].content, "new");
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    fn write_root_session(root: &Path, id: &str, extra: &[&str], parent: Option<&str>) {
+        let mut header = serde_json::json!({
+            "type": "session",
+            "version": 3,
+            "id": id,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "cwd": std::env::temp_dir(),
+        });
+        if let Some(parent) = parent {
+            header["parentSession"] = Value::from(parent);
+        }
+        let user = r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":"do the thing"}}"#;
+        let header = header.to_string();
+        let lines = [header.as_str(), user]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .collect::<Vec<_>>();
+        fs::write(
+            root.join(format!("{id}.jsonl")),
+            format!("{}\n", lines.join("\n")),
+        )
+        .unwrap();
+    }
+
+    /// Lists a root holding a plain control session plus one session under test.
+    fn list_with(id: &str, extra: &[&str], parent: Option<&str>) -> Vec<ProviderSessionSummary> {
+        let root = std::env::temp_dir().join(format!("waku-pi-root-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_root_session(&root, "control", &[], None);
+        write_root_session(&root, id, extra, parent);
+        let sessions =
+            list_provider_sessions_in(ProviderKind::ChocoPi, std::slice::from_ref(&root), 50);
+        fs::remove_dir_all(&root).unwrap();
+        sessions
+    }
+
+    fn listed_ids(sessions: &[ProviderSessionSummary]) -> Vec<&str> {
+        let mut ids = sessions
+            .iter()
+            .map(|summary| match &summary.cursor {
+                ProviderResumeCursor::ChocoPi { session_id, .. } => session_id.as_str(),
+                _ => panic!("unexpected cursor"),
+            })
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
+    }
+
+    #[test]
+    fn subagent_marker_hides_the_session_but_history_still_loads() {
+        let marker = r#"{"type":"custom","id":"m1","parentId":"u1","customType":"choco-pi:subagent","data":{"schemaVersion":1,"agentId":"620b15e5-0000","agentType":"implementer","parentSessionId":"p"}}"#;
+        let sessions = list_with("sub", &[marker], Some("/tmp/parent.jsonl"));
+        assert_eq!(listed_ids(&sessions), ["control"]);
+
+        let path = write_session(&[
+            &serde_json::json!({"type":"session","version":3,"id":"sub","cwd":std::env::temp_dir()})
+                .to_string(),
+            r#"{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"task"}}"#,
+            marker,
+        ]);
+        assert!(parse_session(&path).unwrap().is_subagent);
+        let history = provider_session_history(ProviderKind::ChocoPi, "sub", &path, 10).unwrap();
+        assert_eq!(history.messages[0].content, "task");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn legacy_subagent_name_hides_the_session() {
+        let name = r#"{"type":"session_info","id":"i1","parentId":"u1","timestamp":"2026-01-01T00:00:02Z","name":"implementer#620b15e5"}"#;
+        let sessions = list_with("sub", &[name], Some("/tmp/parent.jsonl"));
+        assert_eq!(listed_ids(&sessions), ["control"]);
+    }
+
+    #[test]
+    fn later_user_rename_overrides_a_subagent_like_name() {
+        let first = r#"{"type":"session_info","id":"i1","parentId":"u1","timestamp":"2026-01-01T00:00:02Z","name":"implementer#620b15e5"}"#;
+        let second = r#"{"type":"session_info","id":"i2","parentId":"i1","timestamp":"2026-01-01T00:00:03Z","name":"My task"}"#;
+        let sessions = list_with("renamed", &[first, second], None);
+        assert_eq!(listed_ids(&sessions), ["control", "renamed"]);
+        assert!(sessions.iter().any(|summary| summary.title == "My task"));
+    }
+
+    #[test]
+    fn branched_user_session_with_parent_stays_listed() {
+        let name = r#"{"type":"session_info","id":"i1","parentId":"u1","timestamp":"2026-01-01T00:00:02Z","name":"Refactor parser"}"#;
+        let sessions = list_with("branch", &[name], Some("/tmp/parent.jsonl"));
+        assert_eq!(listed_ids(&sessions), ["branch", "control"]);
+    }
+
+    #[test]
+    fn subagent_name_heuristic_is_strict() {
+        assert!(is_subagent_session_name("implementer#620b15e5"));
+        assert!(is_subagent_session_name("my_agent.v2-x#d0f0a123"));
+        assert!(!is_subagent_session_name("implementer#620B15E5"));
+        assert!(!is_subagent_session_name("implementer#620b15e"));
+        assert!(!is_subagent_session_name("#620b15e5"));
+        assert!(!is_subagent_session_name("fix bug#620b15e5"));
+        assert!(!is_subagent_session_name("a#b#620b15e5"));
     }
 }
