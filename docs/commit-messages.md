@@ -78,6 +78,7 @@ argument**; `NO_COLOR=1` and `CI=1` are set for all of them.
 | OpenCode | `opencode run` | `--standalone --agent plan` | `--model` | `#<variant>` suffix on the model |
 | Grok Build | `grok` | `--single <prompt> --output-format plain --permission-mode plan --tools "" --no-memory --no-subagents --disable-web-search --verbatim` | `--model` | `--reasoning-effort` |
 | Pi | `pi` | `--print --no-session --no-tools --no-context-files --no-extensions --no-skills --no-prompt-templates --no-approve` | `--model` | `--thinking` |
+| choco-pi | `pi` (profile launcher) | `--print --no-session --no-tools --no-context-files --no-skills --no-prompt-templates --no-approve` | `--model` | `--thinking` |
 | Oh My Pi | `omp` | `--print --no-session --no-tools --no-rules --no-extensions --no-skills` | `--model` | `--thinking` |
 | Kimi Code | `kimi` | `--prompt <prompt> --output-format text` | `--model` | — |
 
@@ -125,6 +126,12 @@ Where a provider is not simply "flags plus prompt":
 - **Pi** needs the long list because each capability is its own switch.
   `--no-context-files` is its "disable `AGENTS.md` and `CLAUDE.md` discovery"
   flag, so repo instructions cannot contradict the fixed prompt.
+- **choco-pi** is Pi's list minus `--no-extensions`: choco-pi registers its
+  model providers from extensions, so a model id like `openai-codex/…` would
+  not resolve without them. The cost is startup — a run with extensions loaded
+  measured about 10 s against Pi 1.0.4, with no side effects in the workspace.
+  The binary is the profile's launcher, not `PATH` `pi` (see
+  [providers.md](providers.md#pi-oh-my-pi-and-choco-pi)).
 
 `every_provider_uses_a_noninteractive_generation_mode`
 ([git_commit.rs:691](../crates/waku-core/src/git_commit.rs#L691)) walks

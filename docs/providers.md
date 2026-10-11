@@ -18,7 +18,7 @@ session that spans the whole conversation**:
 | Codex app-server (JSON-RPC over stdio) | [driver/codex.rs](../crates/waku-core/src/driver/codex.rs) | Codex CLI |
 | Agent Client Protocol (JSON-RPC over stdio) | [driver/acp.rs](../crates/waku-core/src/driver/acp.rs) | Cursor CLI, Fx, Grok Build, Kimi Code |
 | OpenCode background service (HTTP + server-sent events) | [driver/opencode.rs](../crates/waku-core/src/driver/opencode.rs) | OpenCode |
-| Pi RPC mode (NDJSON request/response over stdio) | [driver/pi.rs](../crates/waku-core/src/driver/pi.rs) | Pi, Oh My Pi |
+| Pi RPC mode (NDJSON request/response over stdio) | [driver/pi.rs](../crates/waku-core/src/driver/pi.rs) | Pi, Oh My Pi, choco-pi |
 | Claude streaming-input session (NDJSON over stdio) | [driver/claude.rs](../crates/waku-core/src/driver/claude.rs) | Claude Code |
 | Amp streaming-JSON session (NDJSON over stdio) | [driver/amp.rs](../crates/waku-core/src/driver/amp.rs) | Amp |
 | Harness client API (typed HTTP + downlink streams) | [driver/deepseek.rs](../crates/waku-core/src/driver/deepseek.rs) | DeepSeek Harness |
@@ -152,20 +152,20 @@ stops a turn, and the short-lived server that backs a Grok fork.
 
 ## At a glance
 
-| | Codex CLI | Pi | Oh My Pi | Claude Code | Amp | Cursor CLI | Fx | OpenCode | Grok Build | Kimi Code |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Binary | `codex` | `pi` | `omp` | `claude` | `amp` | `cursor-agent` | `fx` | `opencode` | `grok` | `kimi` |
-| Wire protocol | JSON-RPC over stdio | NDJSON RPC over stdio | NDJSON RPC over stdio | stream-json over stdio | stream-json over stdio | ACP over stdio | ACP over stdio | HTTP + SSE | ACP over stdio | ACP over stdio |
-| Process spans the whole session | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| Process spawned per turn | no | no | no | no | no | no | no | no | no | no |
-| Bidirectional | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| Reasoning stream | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| Interactive approvals | yes | no | no (has them; Waku runs `--yolo`) | yes | no | yes | yes | yes | yes | yes |
-| Mid-turn steering | yes | yes | yes | yes | yes | yes | **no** | yes | yes | yes (transport) |
-| Model discovery | yes | yes | yes | no (fixed) | no (modes) | yes | yes | yes | yes | yes |
-| Computer Use | yes | yes | no (ships its own) | no | no | no | no | yes | yes | no |
-| Restricted to Full access | no | yes | yes | no | yes | no | no | no | no | no |
-| Rewind and branch at a turn | yes | yes | yes | yes | yes | yes | **no** | yes | yes | **no** |
+| | Codex CLI | Pi | Oh My Pi | choco-pi | Claude Code | Amp | Cursor CLI | Fx | OpenCode | Grok Build | Kimi Code |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Binary | `codex` | `pi` | `omp` | `pi` (profile launcher) | `claude` | `amp` | `cursor-agent` | `fx` | `opencode` | `grok` | `kimi` |
+| Wire protocol | JSON-RPC over stdio | NDJSON RPC over stdio | NDJSON RPC over stdio | NDJSON RPC over stdio | stream-json over stdio | stream-json over stdio | ACP over stdio | ACP over stdio | HTTP + SSE | ACP over stdio | ACP over stdio |
+| Process spans the whole session | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Process spawned per turn | no | no | no | no | no | no | no | no | no | no | no |
+| Bidirectional | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Reasoning stream | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Interactive approvals | yes | no | no (has them; Waku runs `--yolo`) | no (extension dialogs reach the user) | yes | no | yes | yes | yes | yes | yes |
+| Mid-turn steering | yes | yes | yes | yes | yes | yes | yes | **no** | yes | yes | yes (transport) |
+| Model discovery | yes | yes | yes | yes | no (fixed) | no (modes) | yes | yes | yes | yes | yes |
+| Computer Use | yes | yes | no (ships its own) | no (ships its own) | no | no | no | no | yes | yes | no |
+| Restricted to Full access | no | yes | yes | yes | no | yes | no | no | no | no | no |
+| Rewind and branch at a turn | yes | yes | yes | yes | yes | yes | yes | **no** | yes | yes | **no** |
 
 Kimi Code's steering is the transport's, not a probed policy: the ACP driver
 sends the second `session/prompt` for every agent it drives, but Kimi's
@@ -261,25 +261,30 @@ visible.
 
 ---
 
-## Pi and Oh My Pi
+## Pi, Oh My Pi, and choco-pi
 
 Oh My Pi is a fork of Pi that kept the RPC transport and renamed part of its
-surface, so one driver serves both. `PiFlavor`
+surface, and choco-pi is a Pi agent profile — Pi itself, plus packages and a
+host bridge — so one driver serves all three. `PiFlavor`
 ([pi.rs:39](../crates/waku-core/src/driver/pi.rs#L39)) carries every divergence,
-which is what keeps the two from drifting into near-copies:
+which is what keeps the three from drifting into near-copies:
 
-| | Pi | Oh My Pi |
-| --- | --- | --- |
-| Binary | `pi` | `omp` |
-| Full-access flag | `--approve` | `--yolo` |
-| Update check | skipped by `PI_SKIP_VERSION_CHECK=1` | no env opt-out; gated by a setting, and off the startup path either way |
-| Oversized frames | whole | chunked, once `negotiate_protocol {protocolVersion: 2}` is accepted |
-| Run settles on | `agent_settled` | `agent_end` |
-| Title event / field | `session_info_changed` / `name` | `session_info_update` / `title` |
-| Branch commands | `get_fork_messages`, `fork` | `get_branch_messages`, `branch` |
-| Whole-session copy | in place | only at launch, so Waku shells out (see below) |
-| Computer Use | Waku's Pi extension | none — Oh My Pi ships its own `/computer` |
-| Catalog probe's context-files flag | `--no-context-files` | `--no-rules` |
+| | Pi | Oh My Pi | choco-pi |
+| --- | --- | --- | --- |
+| Binary | `pi` | `omp` | the profile's `pi` launcher (see below) |
+| Full-access flag | `--approve` | `--yolo` | `--approve` |
+| Update check | skipped by `PI_SKIP_VERSION_CHECK=1` | no env opt-out; gated by a setting, and off the startup path either way | as Pi |
+| Extra launch environment | — | — | `CHOCO_PI_HOST=waku`, `CHOCO_PI_HOST_BRIDGE_SCHEMA=1` |
+| Oversized frames | whole | chunked, once `negotiate_protocol {protocolVersion: 2}` is accepted | whole |
+| Run settles on | `agent_settled` | `agent_end` | `agent_settled` |
+| Title event / field | `session_info_changed` / `name` | `session_info_update` / `title` | as Pi |
+| Branch commands | `get_fork_messages`, `fork` | `get_branch_messages`, `branch` | as Pi |
+| Whole-session copy | in place | only at launch, so Waku shells out (see below) | in place |
+| Computer Use | Waku's Pi extension | none — Oh My Pi ships its own `/computer` | none — choco-pi ships its own |
+| Catalog probe's context-files flag | `--no-context-files` | `--no-rules` | `--no-context-files` |
+| `extension_ui_request` dialogs | auto-cancelled | auto-cancelled | forwarded to the user |
+| Background work, goals | — | — | host bridge (see below) |
+| Starts turns on its own | no | no | yes, after background work settles |
 
 Everything below is shared unless noted.
 
@@ -380,6 +385,154 @@ yet it is always accepted, so it is added back
 `--skill <SKILL.md>`, with the REPL and helper paths passed through the
 environment. Waku's bridge is written against Pi's extension API, and Oh My Pi
 ships its own `/computer` instead, so the flag is never passed to it.
+choco-pi loads its own computer-use package, and two computer-use toolsets in
+one session would confuse the model, so it does not get Waku's either.
+
+### choco-pi
+
+**Identification.** choco-pi launches the same `pi` binary as Pi, so the
+binary cannot tell them apart. Its installer writes a marker,
+`<agentDir>/choco-pi/profile.json`, where `agentDir` is
+`PI_CODING_AGENT_DIR` or `~/.pi/agent` — the rule Pi itself uses
+([choco_pi_profile.rs](../crates/waku-core/src/choco_pi_profile.rs)):
+
+```json
+{
+  "schema": 1,
+  "checkout": "/Users/me/Workspace/choco-pi",
+  "revision": "34fddf04",
+  "pi": { "version": "1.0.4", "launcher": "/Users/me/.local/pi-shim/pi" },
+  "hostBridge": {
+    "schema": 1,
+    "entryPrefix": "choco-pi:host-bridge",
+    "statusKey": "choco-pi.host-bridge"
+  }
+}
+```
+
+The marker counts only when it parses, declares `schema: 1`, and names a
+checkout directory that exists; otherwise choco-pi is not installed and plain
+Pi is unaffected. Unknown fields are ignored. A `hostBridge.schema` newer than
+Waku understands keeps choco-pi installed but turns the bridge off, so the
+session behaves like Pi.
+
+While the marker is valid, **plain Pi reports itself as not installed**: on that
+machine `pi --mode rpc` runs choco-pi anyway, and two providers launching the
+same process would leave one of them without the bridge. A Pi binary override
+in Settings brings Pi back.
+
+**Launcher.** A machine can have one Pi on `PATH` and pin another for choco-pi,
+so the binary resolves as: the choco-pi override in Settings, else
+`pi.launcher` from the marker when it is an executable file, else `pi` on
+`PATH`. Every place Waku spawns choco-pi goes through the provider probe and
+therefore through this order — the session driver, the model probe, the
+slash-command probe, and commit-message generation.
+
+**Probes.** The slash-command probe gets 30 s rather than the 10 s other CLIs
+get: loading choco-pi's packages measured 9.4 s before `get_commands` answered.
+The model probe answered in under a second. Skills and prompt templates come
+from Pi's locations plus the checkout's `.pi/skills`, `.pi/prompts`, and each
+`.pi/packages/*/skills`.
+
+**Background work and goals — the host bridge.** choco-pi's `host-bridge`
+extension reports subagents, shells, and the goal in two channels. Waku turns
+them into `BackgroundWork` and `GoalUpdated` events
+([pi_host_bridge.rs](../crates/waku-core/src/driver/pi_host_bridge.rs)).
+
+1. *Session entries* — `pi.appendEntry("choco-pi:host-bridge/<kind>", data)`,
+   which the RPC stream carries as `entry_appended` with `entry.type ==
+   "custom"`, `entry.customType`, and `entry.data`. Entries are durable: they
+   are written whether or not Waku is the client.
+2. *Progress frames* — `ctx.ui.setStatus("choco-pi.host-bridge", JSON)`, sent
+   only when `CHOCO_PI_HOST=waku`, debounced to 250 ms. They arrive as
+   `extension_ui_request` with `method: "setStatus"`. A frame only updates
+   items an entry has already introduced; unknown ids are ignored.
+
+Schema 1, the contract shared with choco-pi's `docs/waku-integration.md` §6.4.
+Every entry's `data` starts `{ schema: 1, at: <unix ms>, … }`; Waku ignores an
+entry or frame whose schema it does not know, and ignores unknown fields and
+events.
+
+```ts
+// choco-pi:host-bridge/subagent
+{ schema: 1, at: number,
+  event: "created" | "started" | "completed" | "failed" | "stopped" | "lost" | "steered" | "resumed",
+  agent: { id: string, parentId: string | null, role: string, model: string | null,
+           description: string, background: boolean, cwd: string | null,
+           toolCallId: string | null, outputFile: string | null,
+           status: "queued" | "running" | "completed" | "failed" | "stopped" | "lost",
+           startedAt: number | null, finishedAt: number | null, summary: string | null },
+  live: string[] }   // every agent id still live after this transition
+
+// choco-pi:host-bridge/shell
+{ schema: 1, at: number,
+  event: "started" | "exited" | "stopped" | "lost",
+  shell: { id: string, name: string | null, command: string, cwd: string,
+           pid: number | null, exitCode: number | null, startedAt: number,
+           finishedAt: number | null, toolCallId: string | null, tailPath: string | null },
+  live: string[] }
+
+// choco-pi:host-bridge/goal
+{ schema: 1, at: number,
+  goal: null | { objective: string, status: "active" | "paused" | "budgetLimited" | "complete",
+                 tokenBudget: number | null, tokensUsed: number, activeSeconds: number } }
+
+// choco-pi:host-bridge/workflow
+{ schema: 1, at: number, event: "created" | "completed" | "cancelled",
+  workflow: { id: string, title: string, agentIds: string[] } }
+
+// setStatus "choco-pi.host-bridge" statusText
+{ schema: 1, at: number,
+  subagents: Array<{ id, status, toolUses, tokens, turnCount, maxTurns, durationMs, activity: string | null }>,
+  shells: Array<{ id, status: "running" | "exited", bytes: number }> }
+```
+
+A subagent's status comes from `agent.status`, never from `event`, which is
+informational: choco-pi can record `started` before `created`. Updates are
+idempotent by id, and an entry older than the last one seen for an id cannot
+move a finished item back to running. A shell that exits with code 0 completes;
+any other exit, including a null code from a signal or failed spawn, fails. `lost`
+means the runtime that owned the item is gone (a fork or restart) — the work may
+still be running, so a later `exited` or `stopped` for the same id is applied.
+Each entry's `live` list reconciles the whole set. A subagent's `outputFile` is
+tailed in bounded reads as entries and frames arrive; a shell's `tailPath` is
+null for now, and its frames carry only a byte count.
+
+**Connect.** Waku does not replay the session's entries — a long choco-pi
+session file measured 29 MB. After the handshake it sends `/host-bridge
+snapshot`, and choco-pi appends a fresh goal entry plus one entry per live
+subagent and shell. Those arrive before the command's response; on the response
+Waku reconciles the live set from them (empty when none arrived) and publishes
+the goal. Refreshing background work sends the same command, at most every 30 s
+and only while something is live, because each snapshot appends entries to the
+session file. Every bridge command is sent only when the session's
+`get_commands` lists `host-bridge`: an unclaimed `/host-bridge …` prompt
+would reach the model as a user message.
+
+**Commands.** Stopping, snapshots, and goal changes are extension commands sent
+as plain `prompt` requests, not as turns: `/host-bridge stop subagent <id>`,
+`/host-bridge stop shell <id>`, `/host-bridge snapshot`, `/goal <objective>`,
+`/goal pause`, `/goal resume`, `/goal clear`, and `/host-bridge goal complete`.
+An extension command answers with `data.disposition: "handled"`, even while a
+turn is streaming; any other answer fails the stop.
+
+**Waking up.** When a background subagent finishes, choco-pi settles the run
+(`agent_settled`), records the entry, and then starts a new run on its own
+(`agent_start` with no prompt). The desktop and web clients give that turn a
+transcript home, as they do for Claude Code and Codex.
+
+**Dialogs.** Extension `confirm`, `select`, `input`, and `editor` requests
+become `UserInputRequested` instead of being auto-cancelled; the answer goes
+back as `extension_ui_response` — `confirmed` for a confirm, the chosen option's
+label as `value` for a select, the text for input and editor, `cancelled: true`
+when dismissed. choco-pi's confirms carry no timeout; when one does, Pi resolves
+it on its own at the deadline and Waku discards a later answer. A dialog raised
+outside a turn is still auto-cancelled, as on Pi. `notify` with type `error`
+becomes an `Error`.
+
+**Tool progress.** choco-pi's `Agent` tool emits a progress update roughly every
+80 ms; Waku keeps only the latest per tool call and forwards at most one every
+100 ms, always flushing the last before the call ends.
 
 ---
 
@@ -856,14 +1009,16 @@ maps into each CLI's own vocabulary.
 | Auto | `on-request` / `workspace-write` / `auto_review` | `auto` | auto-answered | `session/set_mode` → `code` | auto-answered (`once`) | auto-answered | auto-answered |
 | Full access | `never` / `danger-full-access` / `user` | `bypassPermissions` + `--dangerously-skip-permissions` | auto-answered | `session/set_mode` → `code` | auto-answered (`once`) | auto-answered | auto-answered |
 
-Amp, Pi, and Oh My Pi accept Full access only and always run wide open
-(`--dangerously-allow-all`, `--approve`, `--yolo`).
+Amp, Pi, Oh My Pi, and choco-pi accept Full access only and always run wide open
+(`--dangerously-allow-all`, `--approve`, `--yolo`, `--approve`). choco-pi is
+Pi here: its dialogs reach the user, but there is no permission request to
+answer.
 
-Every provider except those three distinguishes Supervised from the auto modes
+Every provider except those four distinguishes Supervised from the auto modes
 in a way the user can actually answer. They decide by launch flag, so
 "Supervised" degrades there to whatever the CLI does without a human at the
 terminal — for Amp because its stream carries no permission request, for Pi
-because it has no permission system to ask with, and for Oh My Pi because
+and choco-pi because Pi has no permission system to ask with, and for Oh My Pi because
 `--yolo` bypasses the one it has. Only the last of those is Waku's own
 limitation rather than the CLI's.
 
@@ -877,6 +1032,7 @@ persisted with the session and is what makes a Waku task outlive its process:
 | Codex | `thread_id` | `thread/resume` |
 | Pi | `session_id`, `session_file` | `switch_session` needs the path |
 | Oh My Pi | `session_id`, `session_file` | same, plus `--fork <file>` for a whole-session copy |
+| choco-pi | `session_id`, `session_file` | as Pi; a separate variant so a plain Pi session never opens a choco-pi one |
 | Claude | `session_id`, `resume_at` | `resume_at` is the transcript message uuid used for forking |
 | Amp | `thread_id`, `fork_context` | `fork_context` is the seeded history for a branch |
 | Cursor | `session_id`, `fork_context` | id is empty until a seeded branch streams one |

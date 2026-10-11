@@ -81,6 +81,7 @@ title near when the provider writes it, and long enough to survive a slow start.
 | Grok Build | Grok | `summary.json` on disk | poll at turn end | [title_refresh.rs:53](../crates/waku-core/src/driver/title_refresh.rs#L53) |
 | OpenCode | OpenCode | SSE stream | connect, `session.renamed` | [opencode.rs:515](../crates/waku-core/src/driver/opencode.rs#L515), [opencode.rs:1568](../crates/waku-core/src/driver/opencode.rs#L1568) |
 | Pi | Pi | NDJSON stream | connect, `session_info_changed` | [pi.rs:472](../crates/waku-core/src/driver/pi.rs#L472), [pi.rs:1214](../crates/waku-core/src/driver/pi.rs#L1214) |
+| choco-pi | choco-pi | NDJSON stream | connect, `session_info_changed` | same as Pi ([pi.rs](../crates/waku-core/src/driver/pi.rs)) |
 | Oh My Pi | Oh My Pi | NDJSON stream | connect, `session_info_update` | [pi.rs:472](../crates/waku-core/src/driver/pi.rs#L472), [pi.rs:1214](../crates/waku-core/src/driver/pi.rs#L1214) |
 | DeepSeek | Harness | stream + projections | `session/title`, projection replay | [deepseek.rs:782](../crates/waku-core/src/driver/deepseek.rs#L782), [deepseek.rs:1139](../crates/waku-core/src/driver/deepseek.rs#L1139) |
 | Kimi Code | Kimi (placeholder) | ACP stream | `session_info_update` | [acp.rs:1305](../crates/waku-core/src/driver/acp.rs#L1305) |
@@ -200,8 +201,9 @@ All three push titles on their own streams, so there is nothing to schedule.
   `"New session - "` are dropped ([opencode.rs:801](../crates/waku-core/src/driver/opencode.rs#L801)):
   that is OpenCode's own placeholder, and letting it through would replace
   Waku's prompt fallback with something strictly less useful.
-- **Pi and Oh My Pi** — `/data/sessionName` at connect, then the stream event.
-  The connect read is shared, but the event is not: Pi sends
+- **Pi, choco-pi, and Oh My Pi** — `/data/sessionName` at connect, then the
+  stream event. The connect read is shared, but the event is not: Pi (and
+  choco-pi, which is Pi underneath) sends
   `session_info_changed` with the title under `name`, Oh My Pi sends
   `session_info_update` with it under `title`, and `PiFlavor` resolves both
   ([pi.rs:69](../crates/waku-core/src/driver/pi.rs#L69)). Either may send an
