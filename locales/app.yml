@@ -1901,6 +1901,14 @@ transcript.show_fewer_files:
   en: Show fewer files
 transcript.showing_first_files:
   en: Showing first %{count} of %{total}
+transcript.report_show_details:
+  en: Show details
+transcript.report_hide_details:
+  en: Hide details
+transcript.report_section:
+  en: "%{count} section"
+transcript.report_sections:
+  en: "%{count} sections"
 transcript.scroll_to_bottom:
   en: Scroll to bottom
 transcript.conversation_turns:

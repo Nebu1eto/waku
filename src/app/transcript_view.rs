@@ -1328,6 +1328,10 @@ impl Waku {
                             view.set_text(message.visible_content(), message.streaming);
                             &*view
                         });
+                    let report_toggle_focus = message.report.is_some().then(|| {
+                        self.transcript_control_focus(format!("report-toggle-{}", message.id), cx)
+                    });
+                    let report_expanded = self.expanded_reports.contains(&message.id);
                     let rendered = render_message(
                         MessageRender {
                             theme: &theme,
@@ -1347,6 +1351,8 @@ impl Waku {
                             menu,
                             waku,
                             composer,
+                            report_expanded,
+                            report_toggle_focus,
                         },
                         cx,
                     );
@@ -1472,6 +1478,31 @@ impl Waku {
                 cx.entity().downgrade(),
             ))
             .into_any_element()
+    }
+
+    /// Discloses or folds a report card's details in place.
+    pub(super) fn toggle_report_card(
+        &mut self,
+        message_id: Uuid,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.pin_transcript_for_disclosure();
+        if expanded {
+            self.expanded_reports.remove(&message_id);
+        } else {
+            self.expanded_reports.insert(message_id);
+        }
+        let message_index = self.selected_session().and_then(|session| {
+            session
+                .messages
+                .iter()
+                .position(|message| message.id == message_id)
+        });
+        if let Some(message_index) = message_index {
+            self.remeasure_transcript_message(message_index);
+        }
+        cx.notify();
     }
 
     pub(super) fn toggle_changed_files(

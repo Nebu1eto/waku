@@ -925,6 +925,10 @@ transcript.review_changes: 审阅
 transcript.show_more_files: 再显示 %{count} 个文件
 transcript.show_fewer_files: 收起文件列表
 transcript.showing_first_files: 仅显示前 %{count}/%{total} 个
+transcript.report_show_details: 显示详情
+transcript.report_hide_details: 隐藏详情
+transcript.report_section: "%{count} 个部分"
+transcript.report_sections: "%{count} 个部分"
 transcript.scroll_to_bottom: 滚动到底部
 transcript.conversation_turns: 对话轮次
 transcript.turn_label: "第 %{number} 轮：%{prompt}"

@@ -34,10 +34,10 @@ use crate::model::{
     BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkStatus, Checkpoint, CheckpointStatus,
     ContextReport, ContextUsage, DriverEvent, FavoriteModel, Message, MessageAttachment,
     MessageRole, PendingPermission, Project, ProviderKind, ProviderModel, ProviderProbe,
-    ProviderReport, ProviderReportKind, ProviderResumeCursor, ProviderSessionHistory,
-    ProviderSessionSummary, QueuedMessage, ReasoningBlock, RuntimeMode, SessionStatus,
-    SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer, UserInputQuestion,
-    compact_path, unix_time, unix_time_millis,
+    ProviderReport, ProviderReportKind, ProviderReportRow, ProviderResumeCursor,
+    ProviderSessionHistory, ProviderSessionSummary, QueuedMessage, ReasoningBlock, RuntimeMode,
+    SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer,
+    UserInputQuestion, compact_path, unix_time, unix_time_millis,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -1323,6 +1323,9 @@ pub struct Waku {
     /// Per-response file cards the user expanded beyond their three-file
     /// preview. Runtime-only, like the other transcript disclosures.
     expanded_changed_files: HashSet<Uuid>,
+    /// Report cards (choco-pi `/status`, `/context`) the user expanded past
+    /// their summary, by message. Runtime-only, like the other disclosures.
+    expanded_reports: HashSet<Uuid>,
     /// Stable focus identities for controls inside virtualized transcript and
     /// diff rows. Recreating a handle on every row build would drop keyboard
     /// focus whenever GPUI re-renders the list.
@@ -1633,6 +1636,7 @@ mod goal_dialog;
 mod image_preview;
 mod project_picker;
 mod render;
+mod report_summary;
 mod right_panel;
 mod runtime;
 mod sessions;
@@ -2896,6 +2900,7 @@ impl Waku {
                 expanded_activity_items: HashMap::new(),
                 expanded_turns: HashSet::new(),
                 expanded_changed_files: HashSet::new(),
+                expanded_reports: HashSet::new(),
                 transcript_control_focuses: RefCell::new(HashMap::new()),
                 session_navigation,
                 session_rename: None,

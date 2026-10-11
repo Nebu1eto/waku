@@ -396,36 +396,8 @@ fn breakdown_color(theme: &Theme, part: BreakdownPart) -> Hsla {
 /// usage panel and the `/context` transcript card; builds only from the
 /// report already in memory.
 pub(super) fn context_breakdown(theme: &Theme, report: &ContextReport) -> Div {
-    const BAR_HEIGHT: f32 = 6.0;
     let segments = breakdown_segments(report);
-    let last = segments.len().saturating_sub(1);
-    let bar = segments.iter().enumerate().fold(
-        div()
-            .h(px(BAR_HEIGHT))
-            .w_full()
-            .flex_none()
-            .flex()
-            .rounded(px(BAR_HEIGHT / 2.0))
-            .bg(theme.overlay_strong)
-            .overflow_hidden(),
-        |bar, (index, segment)| {
-            // Clipping is rectangular, so the end segments round themselves.
-            let radius = px(BAR_HEIGHT / 2.0);
-            bar.child(
-                div()
-                    .h_full()
-                    .flex_none()
-                    .w(relative(segment.fraction))
-                    .bg(breakdown_color(theme, segment.part))
-                    .when(index == 0, |part| {
-                        part.rounded_tl(radius).rounded_bl(radius)
-                    })
-                    .when(index == last, |part| {
-                        part.rounded_tr(radius).rounded_br(radius)
-                    }),
-            )
-        },
-    );
+    let bar = segments_bar(theme, &segments);
     let window = report.context_window.max(1);
     let rows = segments.iter().map(|segment| {
         let (label, estimated) = match segment.part {
@@ -444,13 +416,7 @@ pub(super) fn context_breakdown(theme: &Theme, report: &ContextReport) -> Div {
             .flex()
             .items_center()
             .gap(px(8.0))
-            .child(
-                div()
-                    .size(px(8.0))
-                    .flex_none()
-                    .rounded(px(2.0))
-                    .bg(breakdown_color(theme, segment.part)),
-            )
+            .child(breakdown_swatch(theme, segment.part))
             .child(
                 div()
                     .flex_1()
@@ -476,6 +442,52 @@ pub(super) fn context_breakdown(theme: &Theme, report: &ContextReport) -> Div {
         .gap(px(6.0))
         .child(bar)
         .children(rows)
+}
+
+/// The stacked context bar alone, for a collapsed `/context` card.
+pub(super) fn context_bar(theme: &Theme, report: &ContextReport) -> Div {
+    segments_bar(theme, &breakdown_segments(report))
+}
+
+fn segments_bar(theme: &Theme, segments: &[BreakdownSegment]) -> Div {
+    const BAR_HEIGHT: f32 = 6.0;
+    let last = segments.len().saturating_sub(1);
+    segments.iter().enumerate().fold(
+        div()
+            .h(px(BAR_HEIGHT))
+            .w_full()
+            .flex_none()
+            .flex()
+            .rounded(px(BAR_HEIGHT / 2.0))
+            .bg(theme.overlay_strong)
+            .overflow_hidden(),
+        |bar, (index, segment)| {
+            // Clipping is rectangular, so the end segments round themselves.
+            let radius = px(BAR_HEIGHT / 2.0);
+            bar.child(
+                div()
+                    .h_full()
+                    .flex_none()
+                    .w(relative(segment.fraction))
+                    .bg(breakdown_color(theme, segment.part))
+                    .when(index == 0, |part| {
+                        part.rounded_tl(radius).rounded_bl(radius)
+                    })
+                    .when(index == last, |part| {
+                        part.rounded_tr(radius).rounded_br(radius)
+                    }),
+            )
+        },
+    )
+}
+
+/// The square that links a labeled segment to its color in the bar.
+pub(super) fn breakdown_swatch(theme: &Theme, part: BreakdownPart) -> Div {
+    div()
+        .size(px(8.0))
+        .flex_none()
+        .rounded(px(2.0))
+        .bg(breakdown_color(theme, part))
 }
 
 /// A window's reset time as a `usage` card shows it: the localized reset

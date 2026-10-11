@@ -2548,6 +2548,7 @@ impl Waku {
             self.expanded_activity_items.clear();
             self.expanded_turns.clear();
             self.expanded_changed_files.clear();
+            self.expanded_reports.clear();
             self.transcript_control_focuses.borrow_mut().clear();
             self.splice_transcript_rows_after_visibility_change(&previous_kinds);
             self.show_toast(match cleanup_error {
@@ -3321,6 +3322,7 @@ impl Waku {
             self.expanded_activity_items.clear();
             self.expanded_turns.clear();
             self.expanded_changed_files.clear();
+            self.expanded_reports.clear();
             self.transcript_control_focuses.borrow_mut().clear();
             self.message_edit = None;
             self.hide_toast();

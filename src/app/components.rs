@@ -1,5 +1,6 @@
 use super::*;
 
+use super::report_summary::{ReportSummary, report_summary};
 use chrono::{Datelike, Days};
 use std::path::Path;
 
@@ -372,6 +373,10 @@ pub(super) struct MessageRender<'a> {
     pub(super) menu: ContextMenuHandle,
     pub(super) waku: gpui::WeakEntity<Waku>,
     pub(super) composer: Entity<ComposerInput>,
+    /// Whether a report card shows its details, and the stable focus of its
+    /// toggle. The focus is only set for a report message.
+    pub(super) report_expanded: bool,
+    pub(super) report_toggle_focus: Option<FocusHandle>,
 }
 
 fn render_sent_message_attachments(
@@ -563,6 +568,8 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         menu,
         waku,
         composer,
+        report_expanded,
+        report_toggle_focus,
     } = params;
 
     let content = message.visible_content().to_owned();
@@ -852,11 +859,17 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         }
         MessageRole::System if message.report.is_some() => {
             let report = message.report.as_deref().expect("guarded above");
+            let disclosure = report_toggle_focus.map(|focus| ReportDisclosure {
+                message_id,
+                expanded: report_expanded,
+                focus,
+                waku: waku.clone(),
+            });
             div()
                 .w_full()
                 .flex()
                 .justify_center()
-                .child(render_report_card(theme, report))
+                .child(render_report_card(theme, report, disclosure))
         }
         MessageRole::System => div().w_full().flex().justify_center().child(
             div()
@@ -899,11 +912,26 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
     )
 }
 
+/// How a report card's "Show details" toggle reaches the app: which message
+/// it folds, its current state, and a stable focus for keyboard users.
+pub(super) struct ReportDisclosure {
+    pub(super) message_id: Uuid,
+    pub(super) expanded: bool,
+    pub(super) focus: FocusHandle,
+    pub(super) waku: gpui::WeakEntity<Waku>,
+}
+
 /// A provider report (choco-pi's `/status`, `/context`, `/usage`) as a card:
 /// its sections as label/value tables, for `context` the occupancy and its
 /// stacked breakdown first, and for `usage` per-provider quota lanes in
-/// place of the sections. Builds only from the report in the message.
-fn render_report_card(theme: &Theme, report: &ProviderReport) -> Div {
+/// place of the sections. A `status` or `context` card starts collapsed to
+/// its [`report_summary`] and discloses the rest in place. Builds only from
+/// the report in the message.
+fn render_report_card(
+    theme: &Theme,
+    report: &ProviderReport,
+    disclosure: Option<ReportDisclosure>,
+) -> Div {
     let mut card = div()
         .w_full()
         .max_w(px(560.0))
@@ -945,23 +973,90 @@ fn render_report_card(theme: &Theme, report: &ProviderReport) -> Div {
             })),
     );
 
+    let disclosure = disclosure.and_then(|disclosure| Some((report_summary(report)?, disclosure)));
+    let Some((summary, disclosure)) = disclosure else {
+        return report_card_details(theme, report, card);
+    };
+    let expanded = disclosure.expanded;
+    card = if expanded {
+        report_card_details(theme, report, card)
+    } else {
+        report_card_summary(theme, report, &summary, card)
+    };
+    card.child(report_card_toggle(
+        theme,
+        summary.hidden_sections,
+        disclosure,
+    ))
+}
+
+/// The collapsed card: a context report's occupancy, bar, and largest
+/// categories, or a status report's key rows.
+fn report_card_summary(
+    theme: &Theme,
+    report: &ProviderReport,
+    summary: &ReportSummary<'_>,
+    mut card: Div,
+) -> Div {
+    if let Some(context) = report.context.as_ref() {
+        let legend = summary.top_categories.iter().map(|&index| {
+            let category = &context.categories[index];
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(super::usage_meter::breakdown_swatch(
+                    theme,
+                    super::usage_meter::BreakdownPart::Category(index),
+                ))
+                .child(
+                    div()
+                        .text_color(theme.text_secondary)
+                        .child(SharedString::from(category.label.clone())),
+                )
+                .child(
+                    div()
+                        .text_color(theme.text_tertiary)
+                        .child(SharedString::from(format!(
+                            "{}{}",
+                            super::usage_meter::estimate_mark(category.estimated),
+                            crate::usage::format_tokens(category.tokens),
+                        ))),
+                )
+        });
+        card = card
+            .child(report_context_occupancy(theme, context))
+            .child(super::usage_meter::context_bar(theme, context))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_x(px(14.0))
+                    .gap_y(px(4.0))
+                    .children(legend),
+            );
+    }
+    if !summary.rows.is_empty() {
+        card = card.child(
+            div().flex().flex_col().gap(px(3.0)).children(
+                summary
+                    .rows
+                    .iter()
+                    .map(|row| report_card_row(theme, row, false)),
+            ),
+        );
+    }
+    card
+}
+
+/// The expanded card: everything the report carries.
+fn report_card_details(theme: &Theme, report: &ProviderReport, mut card: Div) -> Div {
     if report.kind == ProviderReportKind::Context
         && let Some(context) = report.context.as_ref()
     {
-        let (tokens, estimated) = context.occupied_tokens();
-        let mark = super::usage_meter::estimate_mark(estimated);
-        let window = context.context_window.max(1);
+        let estimated = context.occupied_tokens().1;
         card = card
-            .child(
-                div()
-                    .text_color(theme.text_secondary)
-                    .child(SharedString::from(format!(
-                        "{mark}{} / {} ({mark}{:.0}%)",
-                        crate::usage::format_tokens(tokens),
-                        crate::usage::format_tokens(context.context_window),
-                        tokens as f64 * 100.0 / window as f64,
-                    ))),
-            )
+            .child(report_context_occupancy(theme, context))
             .child(super::usage_meter::context_breakdown(theme, context));
         if estimated || context.categories.iter().any(|category| category.estimated) {
             card = card.child(
@@ -994,42 +1089,139 @@ fn render_report_card(theme: &Theme, report: &ProviderReport) -> Div {
             );
         }
         for row in &section.rows {
-            table = table.child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(12.0))
-                    .child(
-                        div()
-                            .w(gpui::relative(0.38))
-                            .flex_none()
-                            .min_w(px(0.0))
-                            .text_color(theme.text_secondary)
-                            .child(SharedString::from(row.label.clone())),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .text_color(theme.text)
-                                    .child(SharedString::from(row.value.clone())),
-                            )
-                            .children(row.hint.as_ref().map(|hint| {
-                                div()
-                                    .text_size(sp(11.5))
-                                    .text_color(theme.text_tertiary)
-                                    .child(SharedString::from(hint.clone()))
-                            })),
-                    ),
-            );
+            table = table.child(report_card_row(theme, row, true));
         }
         card = card.child(table);
     }
     card
+}
+
+/// "≈6.9k / 600k (≈1%)" — how full the window is, measured or estimated.
+fn report_context_occupancy(theme: &Theme, context: &ContextReport) -> Div {
+    let (tokens, estimated) = context.occupied_tokens();
+    let mark = super::usage_meter::estimate_mark(estimated);
+    let window = context.context_window.max(1);
+    div()
+        .text_color(theme.text_secondary)
+        .child(SharedString::from(format!(
+            "{mark}{} / {} ({mark}{:.0}%)",
+            crate::usage::format_tokens(tokens),
+            crate::usage::format_tokens(context.context_window),
+            tokens as f64 * 100.0 / window as f64,
+        )))
+}
+
+fn report_card_row(theme: &Theme, row: &ProviderReportRow, with_hint: bool) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .gap(px(12.0))
+        .child(
+            div()
+                .w(gpui::relative(0.38))
+                .flex_none()
+                .min_w(px(0.0))
+                .text_color(theme.text_secondary)
+                .child(SharedString::from(row.label.clone())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_color(theme.text)
+                        .child(SharedString::from(row.value.clone())),
+                )
+                .children(row.hint.as_ref().filter(|_| with_hint).map(|hint| {
+                    div()
+                        .text_size(sp(11.5))
+                        .text_color(theme.text_tertiary)
+                        .child(SharedString::from(hint.clone()))
+                })),
+        )
+}
+
+/// "Show details · 2 sections ›" — styled like the changed-files card's
+/// disclosure, and operable with Enter or Space.
+fn report_card_toggle(
+    theme: &Theme,
+    hidden_sections: usize,
+    disclosure: ReportDisclosure,
+) -> impl IntoElement {
+    let ReportDisclosure {
+        message_id,
+        expanded,
+        focus,
+        waku,
+    } = disclosure;
+    let key_waku = waku.clone();
+    let label = if expanded {
+        tr!("transcript.report_hide_details")
+    } else {
+        tr!("transcript.report_show_details")
+    };
+    let hidden = (!expanded && hidden_sections > 0).then(|| {
+        if hidden_sections == 1 {
+            tr!("transcript.report_section", count = hidden_sections)
+        } else {
+            tr!("transcript.report_sections", count = hidden_sections)
+        }
+    });
+    div()
+        .id(SharedString::from(format!("report-toggle-{message_id}")))
+        .track_focus(&focus)
+        .tab_index(0)
+        // Extend the hit area into the card's padding without moving the
+        // label off the card's text column.
+        .mx(px(-6.0))
+        .h(px(26.0))
+        .px(px(6.0))
+        .rounded(px(6.0))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .cursor_default()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_secondary)
+        .focus_visible(|style| style.bg(theme.overlay_strong))
+        .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
+        .active(|style| style.bg(theme.overlay))
+        .child(SharedString::from(label))
+        .children(hidden.map(|hidden| {
+            div()
+                .min_w(px(0.0))
+                .truncate()
+                .font_weight(FontWeight::NORMAL)
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(hidden))
+        }))
+        .child(div().flex_1())
+        .child(icon(
+            if expanded {
+                "icons/chevron-down.svg"
+            } else {
+                "icons/chevron-right.svg"
+            },
+            11.0,
+            theme.text_tertiary,
+        ))
+        .on_click(move |_, _, cx| {
+            let _ = waku.update(cx, |this, cx| {
+                this.toggle_report_card(message_id, expanded, cx);
+            });
+            cx.stop_propagation();
+        })
+        .on_key_down(move |event: &KeyDownEvent, _, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                let _ = key_waku.update(cx, |this, cx| {
+                    this.toggle_report_card(message_id, expanded, cx);
+                });
+                cx.stop_propagation();
+            }
+        })
 }
 
 /// The message row's context menu. Rebuilt on each open, so availability checks
