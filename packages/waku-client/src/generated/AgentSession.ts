@@ -67,9 +67,9 @@ thread_goal?: ThreadGoal | null,
  */
 context_usage?: ContextUsage | null,
 /**
- * The provider's latest `context` report (choco-pi). Live state only:
- * never written to the database, because the provider re-sends it when
- * the session connects, after each turn, and on model change.
+ * The provider's latest `context` report (choco-pi). Not written to the
+ * session row: hydration seeds it from the last persisted context card
+ * until the provider sends a fresh report on connect, turn end or model change.
  */
 latest_context_report?: ProviderReport | null, runtime_event_cursor?: RuntimeEventCursor | null,
 /**
