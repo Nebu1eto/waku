@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::WireDriverEvent;
 use crate::computer_use::{ComputerTarget, ComputerUsePhase, ComputerUseState};
-use crate::model::{ActivityKind, DriverEvent, PermissionOption, UserInputQuestion};
+use crate::model::{ActivityKind, DriverEvent, NoticeLevel, PermissionOption, UserInputQuestion};
 
 pub fn decode_enum<T: DeserializeOwned>(value: &str) -> anyhow::Result<T> {
     serde_json::from_value(Value::String(value.to_owned()))
@@ -119,6 +119,9 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             "turnFinished",
             json!({ "success": success, "summary": summary }),
         ),
+        DriverEvent::Notice { level, message } => {
+            ("notice", json!({ "level": level, "message": message }))
+        }
         DriverEvent::Error(error) => ("error", Value::String(error)),
         DriverEvent::ProcessExited => ("processExited", Value::Null),
     };
@@ -212,6 +215,13 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 summary: finished.summary,
             }
         }
+        "notice" => {
+            let notice: NoticeWire = serde_json::from_value(payload)?;
+            DriverEvent::Notice {
+                level: notice.level,
+                message: notice.message,
+            }
+        }
         "error" => DriverEvent::Error(serde_json::from_value(payload)?),
         "processExited" => DriverEvent::ProcessExited,
         kind => bail!("daemon sent an unsupported driver event {kind:?}"),
@@ -285,10 +295,32 @@ struct TurnFinishedWire {
     summary: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct NoticeWire {
+    level: NoticeLevel,
+    message: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{ThreadGoal, ThreadGoalStatus, UserInputOption, UserInputQuestion};
+
+    #[test]
+    fn notices_round_trip_through_the_daemon_wire() {
+        let wire = event_to_wire(DriverEvent::Notice {
+            level: NoticeLevel::Warning,
+            message: "Context\n  used: 12%".into(),
+        })
+        .unwrap();
+        assert_eq!(wire.kind, "notice");
+        assert_eq!(wire.payload["level"], "warning");
+        let DriverEvent::Notice { level, message } = event_from_wire(wire).unwrap() else {
+            panic!("the event changed variants during its wire round trip");
+        };
+        assert_eq!(level, NoticeLevel::Warning);
+        assert_eq!(message, "Context\n  used: 12%");
+    }
 
     #[test]
     fn goal_updates_round_trip_through_the_daemon_wire() {

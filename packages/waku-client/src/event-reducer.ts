@@ -247,6 +247,30 @@ export function reduceRuntimeEvent(
       result.userInput = null
       break
     }
+    case 'notice': {
+      // A provider message that is neither turn output nor a failure —
+      // choco-pi's commands (`/context`, `/daybreak on`) answer only this
+      // way, and background work reports through it between turns. Every
+      // level renders the same system row; the wording carries severity.
+      const value = asRecord(payload)
+      const message = typeof value?.message === 'string' ? value.message.trim() : ''
+      if (!message) break
+      const turn = acceptsTurnOutput(session) ? activeTurn(session) : undefined
+      if (turn) {
+        // Text after the notice starts a new reply below it.
+        completeReasoning(session)
+        finishStreamingMessages(session)
+      }
+      session.messages.push({
+        id: clock.randomUUID(),
+        turn_id: turn?.id ?? null,
+        role: 'system',
+        content: message,
+        created_at: clock.nowSeconds(),
+        streaming: false,
+      })
+      break
+    }
     case 'error': {
       if (typeof payload !== 'string') break
       result.error = payload
@@ -487,10 +511,14 @@ function settleTurn(
   completeActivities(session)
   const turn = activeTurn(session)
   if (!turn) return false
-  const hasAssistant = session.messages.some(
-    (message) => message.turn_id === turn.id && message.role === 'assistant',
+  // A notice is the whole reply of a handled command; a failed turn still
+  // shows its failure after one.
+  const hasReply = session.messages.some(
+    (message) =>
+      message.turn_id === turn.id
+      && (message.role === 'assistant' || (status === 'completed' && message.role === 'system')),
   )
-  if (!hasAssistant) {
+  if (!hasReply) {
     session.messages.push({
       id: clock.randomUUID(),
       turn_id: turn.id,

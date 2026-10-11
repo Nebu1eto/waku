@@ -854,7 +854,10 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             div()
                 .px(px(10.0))
                 .py(px(4.0))
-                .rounded_full()
+                // A multi-line notice (`/context`) keeps its line breaks; a
+                // pill's full rounding would cut into its corner lines.
+                .when(content.contains('\n'), |pill| pill.rounded(px(10.0)))
+                .when(!content.contains('\n'), |pill| pill.rounded_full())
                 .bg(theme.overlay)
                 .text_size(sp(12.5))
                 .line_height(sp(16.0))

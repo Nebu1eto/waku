@@ -528,7 +528,11 @@ label as `value` for a select, the text for input and editor, `cancelled: true`
 when dismissed. choco-pi's confirms carry no timeout; when one does, Pi resolves
 it on its own at the deadline and Waku discards a later answer. A dialog raised
 outside a turn is still auto-cancelled, as on Pi. `notify` with type `error`
-becomes an `Error`.
+becomes an `Error`; any other `notify` becomes a `Notice`, shown as a system
+row in the turn it answers or between turns — that is the only reply of
+commands such as `/context` or `/daybreak on`. A notice raised outside a turn
+while Waku's own request (handshake, `/host-bridge …`, `/goal …`) is in flight
+answers Waku and is dropped.
 
 **Tool progress.** choco-pi's `Agent` tool emits a progress update roughly every
 80 ms; Waku keeps only the latest per tool call and forwards at most one every

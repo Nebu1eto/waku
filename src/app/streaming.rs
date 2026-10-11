@@ -19,6 +19,34 @@ fn begin_unprompted_provider_turn(session: &mut AgentSession) -> bool {
     true
 }
 
+/// Shows a provider notice as a system row: inside the turn it answers, or
+/// between turns when it reports background work.
+fn push_provider_notice(session: &mut AgentSession, in_turn: bool, message: String) {
+    if in_turn {
+        session.push_message(MessageRole::System, message);
+    } else {
+        session
+            .messages
+            .push(Message::new(MessageRole::System, message));
+    }
+    session.updated_at = unix_time();
+}
+
+/// Whether the running turn already shows the user a reply: assistant text,
+/// or — when it succeeded — a notice from a command that answers only that
+/// way (choco-pi's `/context`, `/daybreak on`). A failed turn still needs
+/// its failure shown after any notice.
+fn active_turn_has_reply(session: &AgentSession, success: bool) -> bool {
+    let Some(turn_id) = session.active_turn_id() else {
+        return false;
+    };
+    session.messages.iter().any(|message| {
+        message.turn_id == Some(turn_id)
+            && (message.role == MessageRole::Assistant
+                || (success && message.role == MessageRole::System))
+    })
+}
+
 impl Waku {
     pub(super) fn finish_streaming_assistant(&mut self, session_id: Uuid) {
         if let Some(session) = self.state.session_mut(session_id) {
@@ -673,7 +701,12 @@ impl Waku {
                 self.complete_turn_blocks(session_id);
                 runtime.stream_phase = None;
                 runtime.park_announced = false;
-                let needs_fallback = !self.turn_has_assistant_message(session_id);
+                let needs_fallback = !self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .is_some_and(|session| active_turn_has_reply(session, success));
                 if let Some(session) = self.state.session_mut(session_id) {
                     session.status = if success {
                         SessionStatus::Idle
@@ -734,6 +767,24 @@ impl Waku {
                         &body,
                         cx,
                     );
+                }
+            }
+            DriverEvent::Notice { level: _, message } => {
+                // Every level renders the same system row: a message carries
+                // no level to persist, and the provider's own wording says
+                // when something needs attention.
+                let in_turn = self.accepts_turn_output(session_id);
+                if in_turn {
+                    // Text after the notice starts a new reply below it.
+                    if runtime.stream_phase == Some(StreamPhase::Reasoning) {
+                        self.complete_reasoning_activity(session_id);
+                    }
+                    self.finish_streaming_assistant(session_id);
+                    runtime.stream_phase = None;
+                }
+                if let Some(session) = self.state.session_mut(session_id) {
+                    push_provider_notice(session, in_turn, message);
+                    self.state.mark_session_dirty(session_id);
                 }
             }
             DriverEvent::Error(error) => {
@@ -1087,5 +1138,41 @@ mod tests {
             assert!(!begin_unprompted_provider_turn(&mut session));
             assert!(session.active_turn_id().is_none());
         }
+    }
+
+    /// choco-pi's `/daybreak on` answers only with a notice; that notice is
+    /// the turn's reply, so the "Turn completed" fallback stays away.
+    #[test]
+    fn a_notice_is_the_reply_of_a_handled_command_turn() {
+        let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::ChocoPi);
+        let turn_id = session.begin_turn("/daybreak on");
+        assert!(
+            !active_turn_has_reply(&session, true),
+            "fallback still needed"
+        );
+
+        push_provider_notice(&mut session, true, "Daybreak on.\nModel: opus".into());
+        let notice = session.messages.last().unwrap();
+        assert_eq!(notice.role, MessageRole::System);
+        assert_eq!(notice.turn_id, Some(turn_id));
+        assert_eq!(notice.content, "Daybreak on.\nModel: opus");
+        assert!(active_turn_has_reply(&session, true));
+        // A failed turn still shows its failure after the notice.
+        assert!(!active_turn_has_reply(&session, false));
+    }
+
+    #[test]
+    fn a_notice_between_turns_does_not_answer_the_next_turn() {
+        let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::ChocoPi);
+        push_provider_notice(&mut session, false, "Subagent @a finished".into());
+        assert_eq!(session.messages[0].turn_id, None);
+        assert_eq!(session.messages[0].role, MessageRole::System);
+
+        session.begin_turn("/context");
+        assert!(!active_turn_has_reply(&session, true));
+        // A notice that arrives while the turn is not accepting output stays
+        // outside it.
+        push_provider_notice(&mut session, false, "late".into());
+        assert!(!active_turn_has_reply(&session, true));
     }
 }

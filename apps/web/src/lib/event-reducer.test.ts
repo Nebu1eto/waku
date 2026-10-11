@@ -188,6 +188,34 @@ function apply(session: AgentSession, kind: string, payload: unknown) {
   return reduceRuntimeEvent(session, event(kind, payload), clock).session
 }
 
+describe('provider notices', () => {
+  test('a handled command turn shows its notice instead of the fallback', () => {
+    let session = runningSession()
+    session = apply(session, 'notice', { level: 'info', message: 'Context\n  used: 12%' })
+    const notice = session.messages.at(-1)
+    expect(notice).toMatchObject({ role: 'system', turn_id: 'turn', content: 'Context\n  used: 12%' })
+
+    session = apply(session, 'turnFinished', { success: true, summary: null })
+    expect(session.status).toBe('idle')
+    expect(session.messages.filter((message) => message.role === 'assistant')).toHaveLength(0)
+  })
+
+  test('a failed turn still shows its failure after a notice', () => {
+    let session = runningSession()
+    session = apply(session, 'notice', { level: 'warning', message: 'Careful' })
+    session = apply(session, 'turnFinished', { success: false, summary: 'boom' })
+    expect(session.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'boom' })
+  })
+
+  test('a notice between turns stays outside them, and empty ones are ignored', () => {
+    let session: AgentSession = { ...runningSession(), status: 'idle', turns: [] }
+    session = apply(session, 'notice', { level: 'info', message: '  ' })
+    expect(session.messages).toHaveLength(1)
+    session = apply(session, 'notice', { level: 'info', message: 'Subagent @a finished' })
+    expect(session.messages.at(-1)).toMatchObject({ role: 'system', turn_id: null })
+  })
+})
+
 describe('thread goals', () => {
   test('stores goal updates and names a goal-first task from its objective', () => {
     let session: AgentSession = { ...runningSession(), status: 'idle', messages: [], turns: [] }

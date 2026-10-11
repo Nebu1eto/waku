@@ -31,8 +31,8 @@ use crate::driver::{
 };
 use crate::model::{
     ActivityKind, BackgroundWorkEvent, BackgroundWorkKey, BackgroundWorkKind, DriverEvent,
-    GoalOperation, ProviderResumeCursor, ReportedCommand, RuntimeMode, ThreadGoalStatus,
-    UserInputAnswer, UserInputOption, UserInputQuestion,
+    GoalOperation, NoticeLevel, ProviderResumeCursor, ReportedCommand, RuntimeMode,
+    ThreadGoalStatus, UserInputAnswer, UserInputOption, UserInputQuestion,
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -2297,15 +2297,39 @@ fn forward_extension_ui(
             state.publish_bridge_events(bridge_events, events);
         }
         "notify" => {
-            if value.get("notifyType").and_then(Value::as_str) == Some("error")
-                && let Some(message) = value
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|message| !message.is_empty())
-            {
-                let _ = events.send(DriverEvent::Error(message.to_owned()));
+            let Some(message) = value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|message| !message.is_empty())
+            else {
+                return;
+            };
+            // An untyped `ctx.ui.notify(message)` is informational.
+            let level = match value.get("notifyType").and_then(Value::as_str) {
+                Some("error") => {
+                    let _ = events.send(DriverEvent::Error(message.to_owned()));
+                    return;
+                }
+                Some("warning") => NoticeLevel::Warning,
+                _ => NoticeLevel::Info,
+            };
+            // Extension commands (`/context`, `/daybreak on`) answer only
+            // through notices, and background work reports through them
+            // between turns. A notice raised while Waku itself drives Pi
+            // outside a turn — the handshake, `/host-bridge …`, or the goal
+            // dialog's `/goal …` — answers Waku, which reflects the outcome
+            // in its own UI.
+            if !state.run_started {
+                let pending = pending.lock();
+                if !pending.is_empty() && !pending.values().any(PendingResponse::is_prompt) {
+                    return;
+                }
             }
+            let _ = events.send(DriverEvent::Notice {
+                level,
+                message: message.to_owned(),
+            });
         }
         "confirm" | "select" | "input" | "editor" => {
             let Some(id) = value.get("id").and_then(Value::as_str) else {
@@ -3399,6 +3423,7 @@ mod chocopi_tests {
             DriverEvent::TurnFinished { success, .. } => format!("turn finished {success}"),
             DriverEvent::TextDelta(text) => format!("text {text}"),
             DriverEvent::Error(error) => format!("error {error}"),
+            DriverEvent::Notice { level, message } => format!("notice {level:?} {message}"),
             DriverEvent::UserInputRequested { request_id, .. } => format!("ask {request_id}"),
             DriverEvent::RichActivity(item) => format!("activity {}", item.complete),
             other => format!("{other:?}"),
@@ -3668,6 +3693,9 @@ mod chocopi_tests {
                 "goal none",
                 // A background Agent: `started` lands before `created`.
                 "turn started",
+                // The captured session runs outside Git; choco-pi says so
+                // in the turn, as its TUI does.
+                "notice Warning File checkpoints are off for this session: No Git repository with a working tree at /work. Conversation rewind and fork still work.",
                 "upsert subagent:10b7e07d-d3e4-495 Running",
                 "reconcile [10b7e07d-d3e4-495]",
                 "upsert subagent:10b7e07d-d3e4-495 Running",
@@ -3769,6 +3797,7 @@ mod chocopi_tests {
                 "ask confirm-1",
                 "ask input-1",
                 "ask editor-1",
+                "notice Info Reasoning effort: low",
                 "error MCP server figma failed to start",
             ]
         );
@@ -3906,24 +3935,104 @@ mod chocopi_tests {
         ));
     }
 
+    fn notify_frames() -> String {
+        [
+            json!({"type": "extension_ui_request", "id": "n1", "method": "notify", "message": "boom", "notifyType": "error"}),
+            json!({"type": "extension_ui_request", "id": "n2", "method": "notify", "message": "fine", "notifyType": "warning"}),
+            json!({"type": "extension_ui_request", "id": "n3", "method": "setTitle", "title": "x"}),
+            json!({"type": "extension_ui_request", "id": "n4", "method": "notify", "message": "  Context\n  used: 12%\n", "notifyType": "info"}),
+            // `ctx.ui.notify(message)` without a type reaches RPC untyped.
+            json!({"type": "extension_ui_request", "id": "n5", "method": "notify", "message": "Goal cleared."}),
+            json!({"type": "extension_ui_request", "id": "n6", "method": "notify", "message": " \n ", "notifyType": "info"}),
+        ]
+        .map(|frame| frame.to_string())
+        .join("\n")
+    }
+
     /// W6 (d)
     #[test]
-    fn chocopi_error_notifications_surface_and_others_do_not() {
+    fn chocopi_notifications_surface_as_errors_or_notices() {
         let mut harness = Harness::new(PiFlavor::ChocoPi);
+        let events = harness.feed(&notify_frames());
+        assert_eq!(
+            events.iter().map(describe).collect::<Vec<_>>(),
+            [
+                "error boom",
+                "notice Warning fine",
+                "notice Info Context\n  used: 12%",
+                "notice Info Goal cleared.",
+            ]
+        );
+        assert!(harness.sent().is_empty());
+    }
+
+    #[test]
+    fn plain_pi_notifications_stay_silent() {
+        for flavor in [PiFlavor::Pi, PiFlavor::OhMyPi] {
+            let mut harness = Harness::new(flavor);
+            let events = harness.feed(&notify_frames());
+            assert!(events.is_empty(), "{flavor:?}: {events:?}");
+            assert!(harness.sent().is_empty());
+        }
+    }
+
+    /// `/daybreak on` answers only through `notify`, then `handled`.
+    #[test]
+    fn chocopi_handled_command_turn_carries_its_notice() {
+        let mut harness = Harness::new(PiFlavor::ChocoPi);
+        send_prompt(&mut Vec::new(), &harness.pending, &mut 0, "/daybreak on").unwrap();
         let events = harness.feed(
             &[
-                json!({"type": "extension_ui_request", "id": "n1", "method": "notify", "message": "boom", "notifyType": "error"}),
-                json!({"type": "extension_ui_request", "id": "n2", "method": "notify", "message": "fine", "notifyType": "warning"}),
-                json!({"type": "extension_ui_request", "id": "n3", "method": "setTitle", "title": "x"}),
+                json!({"type": "extension_ui_request", "id": "n1", "method": "notify", "message": "Daybreak on.", "notifyType": "info"}),
+                json!({"id": "waku-1", "type": "response", "command": "prompt",
+                    "success": true, "data": {"disposition": "handled"}}),
             ]
             .map(|frame| frame.to_string())
             .join("\n"),
         );
         assert_eq!(
             events.iter().map(describe).collect::<Vec<_>>(),
+            [
+                "notice Info Daybreak on.",
+                "turn started",
+                "turn finished true"
+            ]
+        );
+    }
+
+    /// Notices raised while Waku itself drives Pi outside a turn — the
+    /// handshake, `/host-bridge …`, `/goal …` from the goal dialog —
+    /// answer Waku, not the user.
+    #[test]
+    fn chocopi_notices_answering_waku_requests_outside_a_turn_are_dropped() {
+        let mut harness = Harness::new(PiFlavor::ChocoPi);
+        let (sender, _receiver) = bounded(1);
+        harness
+            .pending
+            .lock()
+            .insert("waku-7".to_owned(), PendingResponse::Request(sender));
+        let notice = json!({"type": "extension_ui_request", "id": "n1", "method": "notify", "message": "Goal paused.", "notifyType": "info"});
+        assert!(harness.feed_value(notice.clone()).is_empty());
+        // An error is still reported.
+        let events = harness.feed_value(json!({"type": "extension_ui_request", "id": "n2", "method": "notify", "message": "boom", "notifyType": "error"}));
+        assert_eq!(
+            events.iter().map(describe).collect::<Vec<_>>(),
             ["error boom"]
         );
-        assert!(harness.sent().is_empty());
+        // Inside a run the same notice belongs to the turn.
+        harness.feed_value(json!({"type": "agent_start"}));
+        let events = harness.feed_value(notice.clone());
+        assert_eq!(
+            events.iter().map(describe).collect::<Vec<_>>(),
+            ["notice Info Goal paused."]
+        );
+        // Background notices with nothing in flight surface on their own.
+        let mut harness = Harness::new(PiFlavor::ChocoPi);
+        let events = harness.feed_value(notice);
+        assert_eq!(
+            events.iter().map(describe).collect::<Vec<_>>(),
+            ["notice Info Goal paused."]
+        );
     }
 
     /// W6 (e): a schema this build does not know is ignored, never guessed.

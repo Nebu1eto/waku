@@ -1968,8 +1968,24 @@ pub enum DriverEvent {
         success: bool,
         summary: Option<String>,
     },
+    /// A provider message for the user that is neither turn output nor a
+    /// failure — choco-pi's extension commands answer `/context` or
+    /// `/daybreak on` this way. Shown in the transcript as a system row.
+    Notice {
+        level: NoticeLevel,
+        message: String,
+    },
     Error(String),
     ProcessExited,
+}
+
+/// How a [`DriverEvent::Notice`] was raised. Errors travel as
+/// [`DriverEvent::Error`] instead.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoticeLevel {
+    Info,
+    Warning,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, TS)]

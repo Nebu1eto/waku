@@ -1079,7 +1079,12 @@ function MessageRow({
   if (message.role === 'system') {
     return (
       <div className="flex justify-center">
-        <div className="rounded-full bg-accent px-2.5 py-1 text-[11px] leading-4 text-[var(--text-tertiary)]">
+        <div
+          className={cn(
+            'whitespace-pre-wrap bg-accent px-2.5 py-1 text-[11px] leading-4 text-[var(--text-tertiary)]',
+            visible.includes('\n') ? 'rounded-[10px]' : 'rounded-full',
+          )}
+        >
           {visible}
         </div>
       </div>

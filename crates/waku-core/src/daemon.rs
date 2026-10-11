@@ -19,8 +19,8 @@ use crate::attachments::AttachmentStore;
 use crate::computer_use::{ComputerTarget, ComputerUsePhase, ComputerUseState};
 use crate::driver::{self, DriverHandle, DriverStartOptions, SessionOptions};
 use crate::model::{
-    ActivityKind, AgentSession, Checkpoint, CheckpointStatus, DriverEvent, PermissionOption,
-    Project, ProviderKind, ProviderResumeCursor, SessionStatus,
+    ActivityKind, AgentSession, Checkpoint, CheckpointStatus, DriverEvent, NoticeLevel,
+    PermissionOption, Project, ProviderKind, ProviderResumeCursor, SessionStatus,
 };
 use crate::persistence::{ComposerDraftStore, PersistedState, StateStore};
 use crate::settings::DaemonSettingsStore;
@@ -1952,6 +1952,9 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             "turnFinished",
             json!({ "success": success, "summary": summary }),
         ),
+        DriverEvent::Notice { level, message } => {
+            ("notice", json!({ "level": level, "message": message }))
+        }
         DriverEvent::Error(error) => ("error", Value::String(error)),
         DriverEvent::ProcessExited => ("processExited", Value::Null),
     };
@@ -2045,6 +2048,13 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 summary: finished.summary,
             }
         }
+        "notice" => {
+            let notice: NoticeWire = serde_json::from_value(payload)?;
+            DriverEvent::Notice {
+                level: notice.level,
+                message: notice.message,
+            }
+        }
         "error" => DriverEvent::Error(serde_json::from_value(payload)?),
         "processExited" => DriverEvent::ProcessExited,
         kind => bail!("daemon sent an unsupported driver event {kind:?}"),
@@ -2116,6 +2126,12 @@ struct UsageWire {
 struct TurnFinishedWire {
     success: bool,
     summary: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NoticeWire {
+    level: NoticeLevel,
+    message: String,
 }
 
 #[cfg(test)]
