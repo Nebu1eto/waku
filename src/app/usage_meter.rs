@@ -186,11 +186,7 @@ impl Waku {
             .latest_context_report
             .as_ref()
             .and_then(|report| report.context.clone());
-        let (context, estimated) = meter_usage(
-            session.context_usage,
-            report.as_ref(),
-            session.model.as_deref(),
-        );
+        let (context, estimated) = session_meter_usage(session);
         let theme = Theme::current(cx);
         let plan = self.plan_usage.get(&provider).cloned();
         let error = self.plan_usage_error.get(&provider).cloned();
@@ -298,6 +294,18 @@ impl Waku {
             },
         ))
     }
+}
+
+/// The shared footer gauge and popover occupancy from the selected session.
+pub(super) fn session_meter_usage(session: &AgentSession) -> (Option<ContextUsage>, bool) {
+    meter_usage(
+        session.context_usage,
+        session
+            .latest_context_report
+            .as_ref()
+            .and_then(|report| report.context.as_ref()),
+        session.model.as_deref(),
+    )
 }
 
 /// The meter's occupancy and whether it is the provider's estimate. A

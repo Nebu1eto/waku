@@ -66,6 +66,8 @@ tokio = { version = "1", features = ["rt"] }
 # happens instead of coalescing into the display link's next one — a panel
 # resize drew once per mouse-move event rather than once per displayed frame.
 [dev-dependencies]
+# Exercise daemon persistence together with the desktop's report/meter boundary.
+waku-core = { path = "crates/waku-core" }
 gpui = { git = "https://github.com/egoist/zed", branch = "waku-webview", features = [
   "test-support",
 ] }

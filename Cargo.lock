@@ -8633,6 +8633,7 @@ dependencies = [
  "url",
  "uuid",
  "waku-client",
+ "waku-core",
  "waku-protocol",
  "webview2-com",
  "windows 0.61.3",

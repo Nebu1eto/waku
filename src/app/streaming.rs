@@ -1263,6 +1263,64 @@ mod tests {
     }
 
     #[test]
+    fn invoked_context_cap_reaches_the_footer_after_session_reload() {
+        use super::super::usage_meter::session_meter_usage;
+        use waku_core::persistence::{PersistedState, StateStore};
+
+        let directory = std::env::temp_dir().join(format!("waku-context-meter-{}", Uuid::new_v4()));
+        let store = StateStore::daemon(directory.join("app.db"));
+        let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
+        let session = &mut state.sessions[0];
+        session.provider = ProviderKind::ChocoPi;
+        session.model = Some("anthropic/claude-haiku-5-5".into());
+        session.context_usage = Some(ContextUsage {
+            tokens: 19_293,
+            window: Some(1_000_000),
+        });
+        session.begin_turn("/context");
+        let report = ProviderReport::parse(
+            r#"{"schema":1,"kind":"context","at":"2026-10-11T12:54:02.080Z",
+                "title":"Context Usage","sections":[],
+                "context":{"model":"anthropic/claude-haiku-5-5","contextWindow":600000,
+                    "measuredTokens":19293,"estimatedTokens":19293,"autocompactReserve":16000,
+                    "categories":[]}}"#,
+        )
+        .unwrap();
+        assert!(apply_provider_report(
+            session,
+            true,
+            Box::new(report),
+            true,
+            Some("Context Usage".into()),
+        ));
+        session.finish_active_turn(TurnStatus::Completed);
+        let expected = (
+            Some(ContextUsage {
+                tokens: 19_293,
+                window: Some(600_000),
+            }),
+            false,
+        );
+        assert_eq!(session_meter_usage(session), expected);
+        store.save(&mut state).unwrap();
+        drop(store);
+
+        let store = StateStore::daemon(directory.join("app.db"));
+        let mut restored = store.load().unwrap();
+        let session = &mut restored.sessions[0];
+        store.hydrate(session).unwrap();
+        assert_eq!(session_meter_usage(session), expected);
+        // A model switch must not revive the persisted cap for the old model.
+        session.model = Some("anthropic/claude-opus-5-5".into());
+        assert_eq!(
+            session_meter_usage(session).0.unwrap().window,
+            Some(1_000_000)
+        );
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn an_invoked_report_is_the_card_reply_of_its_command_turn() {
         let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::ChocoPi);
         let turn_id = session.begin_turn("/status");

@@ -1290,6 +1290,19 @@ impl StateStore {
             .filter_map(message_from_row)
             .collect();
 
+        // The live report is intentionally not stored in session_details.
+        // Restore its last invoked snapshot before the desktop reads the meter;
+        // a newer live report, if retained while unloading, stays authoritative.
+        if session.latest_context_report.is_none() {
+            session.latest_context_report = session
+                .messages
+                .iter()
+                .rev()
+                .filter_map(|message| message.report.as_ref())
+                .find(|report| report.kind == crate::model::ProviderReportKind::Context)
+                .cloned();
+        }
+
         session.detail_loaded = true;
         Ok(())
     }
@@ -1601,7 +1614,8 @@ fn message_from_row(row: MessageColumns) -> Option<Message> {
 /// live-only `latest_context_report`.
 ///
 /// They are rows in `messages` instead, so there is no copy in `data` that
-/// could go stale; the provider re-sends its context report on connect.
+/// could go stale; hydration derives the last invoked context report from its
+/// card until a fresh live report arrives.
 fn session_data(session: &AgentSession) -> io::Result<String> {
     let mut value = serde_json::to_value(session).map_err(to_io_error)?;
     if let Some(object) = value.as_object_mut() {
@@ -3098,10 +3112,9 @@ mod tests {
         fs::remove_dir_all(directory).ok();
     }
 
-    /// A report card survives reload in its message row; the session's
-    /// latest context report is live state and is never written.
+    /// The live cache is not written, but hydration restores its persisted card.
     #[test]
-    fn report_cards_persist_and_the_latest_context_report_does_not() {
+    fn report_cards_seed_the_latest_context_report_on_reload() {
         let directory = temporary_directory();
         let store = store_in(&directory);
         let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
@@ -3130,13 +3143,59 @@ mod tests {
 
         let restored = load_hydrated(&store_in(&directory));
         let session = &restored.sessions[0];
-        assert!(session.latest_context_report.is_none());
+        assert_eq!(session.latest_context_report.as_deref(), Some(&report));
         let card = session.messages.last().unwrap();
         assert_eq!(card.role, MessageRole::System);
         assert_eq!(card.content, "Context Usage\n  used: 1%");
         assert_eq!(card.report.as_deref(), Some(&report));
 
         fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn hydration_restores_the_last_context_card_without_replacing_a_live_report() {
+        let directory = temporary_directory();
+        let store = store_in(&directory);
+        let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
+        let older = crate::model::ProviderReport::parse(
+            r#"{"schema":1,"kind":"context","at":"2026-10-11T08:00:00Z","title":"Older",
+                "sections":[],"context":{"model":"old-model","contextWindow":200000,
+                    "measuredTokens":null,"estimatedTokens":1000,"autocompactReserve":16000,
+                    "categories":[]}}"#,
+        )
+        .unwrap();
+        let mut latest = older.clone();
+        latest.title = "Latest".into();
+        latest.context.as_mut().unwrap().model = Some("new-model".into());
+        latest.context.as_mut().unwrap().context_window = 600_000;
+        let mut status = latest.clone();
+        status.kind = crate::model::ProviderReportKind::Status;
+        status.context = None;
+        let mut usage = status.clone();
+        usage.kind = crate::model::ProviderReportKind::Usage;
+        for report in [older, latest.clone(), status, usage] {
+            let mut card = Message::new(MessageRole::System, report.title.clone());
+            card.report = Some(Box::new(report));
+            state.sessions[0].messages.push(card);
+        }
+        store.save(&mut state).unwrap();
+        drop(store);
+
+        let store = store_in(&directory);
+        let mut restored = store.load().unwrap();
+        let session = &mut restored.sessions[0];
+        store.hydrate(session).unwrap();
+        assert_eq!(session.latest_context_report.as_deref(), Some(&latest));
+
+        let mut live = latest;
+        live.title = "Live".into();
+        live.context.as_mut().unwrap().context_window = 500_000;
+        session.latest_context_report = Some(Box::new(live.clone()));
+        session.release_transcript();
+        store.hydrate(session).unwrap();
+        assert_eq!(session.latest_context_report.as_deref(), Some(&live));
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
