@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import type { ContextReport } from '@waku/client'
-import { breakdownSegments, meterUsage, providerResetPhrase, usedPercent } from './context-report'
+import type { ContextReport, ProviderReport } from '@waku/client'
+import { breakdownSegments, meterUsage, providerResetPhrase, reportSummary, usedPercent } from './context-report'
 
 describe('usage report windows', () => {
   test('remaining windows read as used, clamped', () => {
@@ -66,5 +66,44 @@ describe('context report meter', () => {
     const overrun = breakdownSegments({ ...report(null), contextWindow: 25_000 })
     expect(overrun.some((segment) => segment.part.kind === 'free')).toBe(false)
     expect(overrun.reduce((sum, segment) => sum + segment.fraction, 0)).toBeCloseTo(1)
+  })
+})
+
+async function fixture(kind: 'status' | 'context' | 'usage'): Promise<ProviderReport> {
+  const url = new URL(`../../../../crates/waku-protocol/src/fixtures/choco_pi_report_${kind}.json`, import.meta.url)
+  return JSON.parse(await Bun.file(url).text())
+}
+
+describe('report card summary', () => {
+  test('collapsed status shows its key rows across sections', async () => {
+    const summary = reportSummary(await fixture('status'))
+    expect(summary?.rows.map((row) => row.label)).toEqual(['Model', 'Context usage', 'Tokens', 'Messages'])
+    expect(summary?.rows[0].value).toBe('Claude Fable 5.1 (claude-fable-5-1)')
+    expect(summary?.hiddenSections).toBe(2)
+    expect(summary?.topCategories).toEqual([])
+  })
+
+  test('status without key labels falls back to its first section', async () => {
+    const report = await fixture('status')
+    for (const section of report.sections) {
+      for (const row of section.rows) row.label = `x-${row.label}`
+    }
+    expect(reportSummary(report)?.rows.map((row) => row.label)).toEqual(['x-File', 'x-ID', 'x-Messages', 'x-Tokens'])
+    report.sections = [{ ...report.sections[0], rows: report.sections[0].rows.slice(0, 4) }]
+    expect(reportSummary(report)).toBeNull()
+  })
+
+  test('collapsed context keeps the bar and its largest categories', async () => {
+    const report = await fixture('context')
+    const summary = reportSummary(report)
+    expect(summary?.topCategories.map((index) => report.context?.categories[index].label))
+      .toEqual(['System tools', 'Skills', 'System prompt'])
+    expect(summary?.rows).toEqual([])
+    expect(summary?.hiddenSections).toBe(2)
+  })
+
+  test('usage and untyped context reports never collapse', async () => {
+    expect(reportSummary(await fixture('usage'))).toBeNull()
+    expect(reportSummary({ ...(await fixture('context')), context: null })).toBeNull()
   })
 })

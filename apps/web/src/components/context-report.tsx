@@ -1,11 +1,15 @@
-import type { ContextReport, ProviderReport, UsageReport } from '@waku/client'
+import type { ContextReport, ProviderReport, ProviderReportRow, UsageReport } from '@waku/client'
+import { useState } from 'react'
+import { WakuIcon } from '@/components/waku-icon'
 import {
   breakdownSegments,
   estimateMark,
   formatTokens,
   providerResetPhrase,
+  reportSummary,
   usedPercent,
   type BreakdownPart,
+  type ReportSummary,
 } from '@/lib/context-report'
 import { useI18n } from '@/lib/i18n'
 import type { Translator } from '@/lib/transcript-presentation'
@@ -37,18 +41,7 @@ export function ContextBreakdown({ context, t }: { context: ContextReport; t: Tr
   const window = Math.max(context.contextWindow, 1)
   return (
     <div className="flex flex-col gap-1.5">
-      <div
-        aria-hidden="true"
-        className="flex h-1.5 w-full overflow-hidden rounded-full bg-accent"
-      >
-        {segments.map((segment, index) => (
-          <div
-            key={index}
-            className="h-full shrink-0"
-            style={{ width: `${segment.fraction * 100}%`, background: partColor(segment.part) }}
-          />
-        ))}
-      </div>
+      <ContextBar context={context} />
       {segments.map((segment, index) => {
         const category = segment.part.kind === 'category'
           ? context.categories[segment.part.index]
@@ -75,6 +68,24 @@ export function ContextBreakdown({ context, t }: { context: ContextReport; t: Tr
   )
 }
 
+/** The stacked context bar alone, for a collapsed `/context` card. */
+function ContextBar({ context }: { context: ContextReport }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="flex h-1.5 w-full overflow-hidden rounded-full bg-accent"
+    >
+      {breakdownSegments(context).map((segment, index) => (
+        <div
+          key={index}
+          className="h-full shrink-0"
+          style={{ width: `${segment.fraction * 100}%`, background: partColor(segment.part) }}
+        />
+      ))}
+    </div>
+  )
+}
+
 export function EstimateHint({ t }: { t: Translator }) {
   return <div className="text-[11px] text-[var(--text-tertiary)]">{t('usage.context_estimate_hint')}</div>
 }
@@ -82,15 +93,34 @@ export function EstimateHint({ t }: { t: Translator }) {
 /** A provider report (choco-pi's `/status`, `/context`, `/usage`) as a
  * transcript card: the context occupancy and breakdown first, then each
  * section as a label/value table. A usage report's typed block replaces its
- * sections, which repeat the same figures as text. */
+ * sections, which repeat the same figures as text. A status or context card
+ * starts collapsed to its summary; the expansion is this card's own UI
+ * state, never persisted. */
 export function ReportCard({ report, t }: { report: ProviderReport; t: Translator }) {
-  const context = report.kind === 'context' ? report.context : null
-  const usage = report.kind === 'usage' ? report.usage : null
-  const occupied = context
-    ? context.measuredTokens ?? context.estimatedTokens
-    : 0
-  const estimated = context ? context.measuredTokens == null : false
-  const mark = estimateMark(estimated)
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <ReportCardView
+      expanded={expanded}
+      report={report}
+      t={t}
+      onToggle={() => setExpanded((value) => !value)}
+    />
+  )
+}
+
+export function ReportCardView({
+  expanded,
+  onToggle,
+  report,
+  t,
+}: {
+  expanded: boolean
+  onToggle: () => void
+  report: ProviderReport
+  t: Translator
+}) {
+  const summary = reportSummary(report)
+  const collapsed = summary !== null && !expanded
   return (
     <section
       aria-label={report.title}
@@ -103,41 +133,125 @@ export function ReportCard({ report, t }: { report: ProviderReport; t: Translato
           <span className="min-w-0 truncate text-[var(--text-tertiary)]">{report.context.model}</span>
         )}
       </header>
+      {summary && collapsed
+        ? <ReportSummaryBody report={report} summary={summary} />
+        : <ReportDetails report={report} t={t} />}
+      {summary && (
+        <button
+          aria-expanded={expanded}
+          className="-mx-1.5 flex h-[26px] items-center gap-1.5 rounded-md px-1.5 text-left text-[11.5px] font-medium text-[var(--text-secondary)] outline-none hover:bg-[var(--raised)] hover:text-foreground focus-visible:bg-[var(--raised)] focus-visible:ring-1 focus-visible:ring-ring"
+          type="button"
+          onClick={onToggle}
+        >
+          <span>{t(expanded ? 'transcript.report_hide_details' : 'transcript.report_show_details')}</span>
+          {!expanded && summary.hiddenSections > 0 && (
+            <span className="min-w-0 truncate font-normal text-[var(--text-ghost)]">
+              {t(summary.hiddenSections === 1 ? 'transcript.report_section' : 'transcript.report_sections', {
+                count: summary.hiddenSections,
+              })}
+            </span>
+          )}
+          <span className="flex-1" />
+          <WakuIcon className="size-2.5 shrink-0" name={expanded ? 'chevronDown' : 'chevronRight'} />
+        </button>
+      )}
+    </section>
+  )
+}
+
+/** "≈6.9k / 600k (≈1%)" — how full the window is, measured or estimated. */
+function ContextOccupancy({ context }: { context: ContextReport }) {
+  const estimated = context.measuredTokens == null
+  const occupied = context.measuredTokens ?? context.estimatedTokens
+  const mark = estimateMark(estimated)
+  return (
+    <div className="text-[var(--text-secondary)]">
+      {`${mark}${formatTokens(occupied)} / ${formatTokens(context.contextWindow)} (${mark}${(
+        occupied * 100 / Math.max(context.contextWindow, 1)
+      ).toFixed(0)}%)`}
+    </div>
+  )
+}
+
+/** The collapsed card: a context report's occupancy, bar, and largest
+ * categories, or a status report's key rows. */
+function ReportSummaryBody({ report, summary }: { report: ProviderReport; summary: ReportSummary }) {
+  const context = report.context
+  return (
+    <>
       {context && (
         <>
-          <div className="text-[var(--text-secondary)]">
-            {`${mark}${formatTokens(occupied)} / ${formatTokens(context.contextWindow)} (${mark}${(
-              occupied * 100 / Math.max(context.contextWindow, 1)
-            ).toFixed(0)}%)`}
+          <ContextOccupancy context={context} />
+          <ContextBar context={context} />
+          <div className="flex flex-wrap gap-x-3.5 gap-y-1">
+            {summary.topCategories.map((index) => {
+              const category = context.categories[index]
+              return (
+                <span key={index} className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className="size-2 shrink-0 rounded-[2px]"
+                    style={{ background: partColor({ kind: 'category', index }) }}
+                  />
+                  <span className="text-[var(--text-secondary)]">{category.label}</span>
+                  <span className="text-[var(--text-tertiary)]">
+                    {`${estimateMark(category.estimated)}${formatTokens(category.tokens)}`}
+                  </span>
+                </span>
+              )
+            })}
           </div>
+        </>
+      )}
+      {summary.rows.length > 0 && <ReportRows rows={summary.rows} withHints={false} />}
+    </>
+  )
+}
+
+function ReportRows({ rows, title, withHints }: { rows: ProviderReportRow[]; title?: string; withHints: boolean }) {
+  return (
+    <table className="w-full table-fixed border-collapse">
+      {title?.trim() && (
+        <caption className="pb-0.5 text-left text-[11px] font-medium text-[var(--text-tertiary)]">
+          {title}
+        </caption>
+      )}
+      <tbody>
+        {rows.map((row, rowIndex) => (
+          <tr key={`${row.label}-${rowIndex}`} className="align-top">
+            <th className="w-[38%] py-px pr-3 text-left font-normal text-[var(--text-secondary)]" scope="row">
+              {row.label}
+            </th>
+            <td className="py-px break-words">
+              <div>{row.value}</div>
+              {withHints && row.hint && <div className="text-[11px] text-[var(--text-tertiary)]">{row.hint}</div>}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+/** The expanded card: everything the report carries. */
+function ReportDetails({ report, t }: { report: ProviderReport; t: Translator }) {
+  const context = report.kind === 'context' ? report.context : null
+  const usage = report.kind === 'usage' ? report.usage : null
+  const estimated = context ? context.measuredTokens == null : false
+  return (
+    <>
+      {context && (
+        <>
+          <ContextOccupancy context={context} />
           <ContextBreakdown context={context} t={t} />
           {hasEstimate(context, estimated) && <EstimateHint t={t} />}
         </>
       )}
       {usage && <UsageBlocks t={t} usage={usage} />}
       {!usage && report.sections.map((section, index) => (
-        <table key={`${section.title}-${index}`} className="w-full table-fixed border-collapse">
-          {section.title.trim() && (
-            <caption className="pb-0.5 text-left text-[11px] font-medium text-[var(--text-tertiary)]">
-              {section.title}
-            </caption>
-          )}
-          <tbody>
-            {section.rows.map((row, rowIndex) => (
-              <tr key={`${row.label}-${rowIndex}`} className="align-top">
-                <th className="w-[38%] py-px pr-3 text-left font-normal text-[var(--text-secondary)]" scope="row">
-                  {row.label}
-                </th>
-                <td className="py-px break-words">
-                  <div>{row.value}</div>
-                  {row.hint && <div className="text-[11px] text-[var(--text-tertiary)]">{row.hint}</div>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ReportRows key={`${section.title}-${index}`} rows={section.rows} title={section.title} withHints />
       ))}
-    </section>
+    </>
   )
 }
 

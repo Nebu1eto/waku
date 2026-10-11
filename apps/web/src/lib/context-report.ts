@@ -1,4 +1,4 @@
-import type { ContextReport, ContextUsage } from '@waku/client'
+import type { ContextReport, ContextUsage, ProviderReport, ProviderReportRow } from '@waku/client'
 
 export function formatTokens(tokens: number) {
   if (tokens >= 999_500) return `${(tokens / 1_000_000).toFixed(1)}M`
@@ -93,4 +93,57 @@ export function providerResetPhrase(
 export function usedPercent(window: { percent: number; qualifier: 'used' | 'remaining' }) {
   const percent = Math.min(100, Math.max(0, window.percent))
   return window.qualifier === 'remaining' ? 100 - percent : percent
+}
+
+/** Status rows a collapsed card shows, in this order, matched by label. */
+const STATUS_KEY_LABELS = ['Model', 'Context usage', 'Tokens', 'Messages']
+/** Rows a collapsed status card shows when none of the key labels exist. */
+const STATUS_FALLBACK_ROWS = 4
+/** Category swatches a collapsed context card names beside its bar. */
+const CONTEXT_TOP_CATEGORIES = 3
+
+export interface ReportSummary {
+  /** Status rows shown collapsed, in display order. */
+  rows: ProviderReportRow[]
+  /** Indices into the context block's categories, largest first. */
+  topCategories: number[]
+  /** Sections the collapsed card does not show in full. */
+  hiddenSections: number
+}
+
+/**
+ * The collapsed form of a report card, or `null` when it has none: a usage
+ * report, a context report without its typed block, or a status report whose
+ * rows all fit the summary anyway. Mirrors the desktop's `report_summary`.
+ */
+export function reportSummary(report: ProviderReport): ReportSummary | null {
+  if (report.kind === 'context') {
+    const context = report.context
+    if (!context) return null
+    const topCategories = context.categories
+      .map((category, index) => ({ index, tokens: category.tokens }))
+      .filter((category) => category.tokens > 0)
+      // Stable, so equal categories keep the provider's order.
+      .sort((a, b) => b.tokens - a.tokens)
+      .slice(0, CONTEXT_TOP_CATEGORIES)
+      .map((category) => category.index)
+    return {
+      rows: [],
+      topCategories,
+      hiddenSections: report.sections.filter((section) => section.rows.length > 0).length,
+    }
+  }
+  if (report.kind !== 'status') return null
+  const allRows = report.sections.flatMap((section) => section.rows)
+  let rows = STATUS_KEY_LABELS
+    .map((key) => allRows.find((row) => row.label.trim().toLowerCase() === key.toLowerCase()))
+    .filter((row): row is ProviderReportRow => row !== undefined)
+  if (rows.length === 0) {
+    rows = report.sections.find((section) => section.rows.length > 0)?.rows.slice(0, STATUS_FALLBACK_ROWS) ?? []
+  }
+  const shown = new Set(rows)
+  const hiddenSections = report.sections
+    .filter((section) => section.rows.some((row) => !shown.has(row)))
+    .length
+  return hiddenSections > 0 ? { rows, topCategories: [], hiddenSections } : null
 }
