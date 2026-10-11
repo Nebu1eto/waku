@@ -1,6 +1,7 @@
 //! Historical token and cost usage for the settings Usage page, scanned from
 //! the provider CLIs' own on-disk session transcripts (Claude Code's
-//! `~/.claude/projects` and Codex's `~/.codex/sessions`) the way T3 Code and
+//! `~/.claude/projects`, Codex's `~/.codex/sessions`, and choco-pi's Pi
+//! sessions under `~/.pi/agent/sessions`) the way T3 Code and
 //! `ccusage` do it, so usage covers turns driven outside Waku too. Costs are
 //! priced against LiteLLM's model rate table, fetched at most daily and cached
 //! beside the app database.
@@ -61,6 +62,7 @@ fn might_carry_usage(line: &str, provider: UsageProvider) -> bool {
     match provider {
         UsageProvider::Claude => line.contains("\"usage\""),
         UsageProvider::Codex => line.contains("\"token_count\""),
+        UsageProvider::ChocoPi => line.contains("\"usage\""),
     }
 }
 
@@ -355,6 +357,118 @@ fn parse_codex_line(line: &str, state: &mut CodexScanState) -> Option<UsageRecor
     })
 }
 
+/// Per-file state for a Pi session transcript. The `session` header on the
+/// first line names the session and its working directory; usage lines carry
+/// neither.
+struct PiScanState {
+    session_id: String,
+    cwd: String,
+    saw_header: bool,
+}
+
+impl PiScanState {
+    fn new() -> Self {
+        Self {
+            session_id: String::new(),
+            cwd: String::new(),
+            saw_header: false,
+        }
+    }
+}
+
+/// Feeds one line of a Pi (choco-pi) session transcript into `state`,
+/// returning a record for an assistant message that carries usage.
+fn parse_pi_line(line: &str, state: &mut PiScanState) -> Option<UsageRecord> {
+    let record: Value = serde_json::from_str(line).ok()?;
+    match record.get("type").and_then(Value::as_str) {
+        Some("session") => {
+            // A transcript has exactly one header; a fork writes its own
+            // header and never copies the parent's, so only the first counts.
+            if !state.saw_header {
+                state.saw_header = true;
+                if let Some(id) = record.get("id").and_then(Value::as_str) {
+                    state.session_id = id.to_owned();
+                }
+                if let Some(cwd) = record.get("cwd").and_then(Value::as_str) {
+                    state.cwd = cwd.to_owned();
+                }
+            }
+            return None;
+        }
+        Some("message") => {}
+        _ => return None,
+    }
+
+    let message = record.get("message")?.as_object()?;
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
+    let usage = message.get("usage")?.as_object()?;
+    let model = message.get("model").and_then(Value::as_str)?;
+    if model.is_empty() {
+        return None;
+    }
+    let timestamp_ms = parse_timestamp_ms(record.get("timestamp")).or_else(|| {
+        message
+            .get("timestamp")
+            .and_then(Value::as_f64)
+            .filter(|ms| ms.is_finite())
+            .map(|ms| ms as i64)
+    })?;
+
+    let output = int(usage.get("output"));
+    let totals = TokenTotals {
+        // Pi reports input exclusive of cache reads and writes:
+        // totalTokens = input + output + cacheRead + cacheWrite.
+        uncached_input: int(usage.get("input")),
+        cached_input: int(usage.get("cacheRead")),
+        cache_creation: int(usage.get("cacheWrite")),
+        output,
+        // Already inside `output`; a breakout for the mix, as with Codex.
+        reasoning: int(usage.get("reasoning")).min(output),
+    };
+    if totals.total() == 0 {
+        return None;
+    }
+
+    // Pi's `forkFrom` and branched-session export copy entries verbatim
+    // (same entry id and timestamp) into a new file under a new session id,
+    // so the key must not include the session id or forks double count.
+    // Entry ids are only 8 hex characters, unique within one session, so the
+    // copied timestamp is added to keep unrelated sessions from colliding.
+    let dedupe_key = record
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            format!(
+                "pi:{id}:{}",
+                record
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            )
+        });
+
+    Some(UsageRecord {
+        provider: UsageProvider::ChocoPi,
+        timestamp_ms,
+        model: model.to_owned(),
+        session_id: state.session_id.clone(),
+        project: state.cwd.clone(),
+        totals,
+        // Pi prices turns locally and reports 0 for models missing from its
+        // own rate table; treat that as "unpriced" so the LiteLLM lookup can
+        // still cost the turn instead of recording a silent $0.
+        reported_cost_usd: usage
+            .get("cost")
+            .and_then(|cost| cost.get("total"))
+            .and_then(Value::as_f64)
+            .filter(|cost| cost.is_finite() && *cost > 0.0),
+        dedupe_key,
+    })
+}
+
 /* ------------------------------------------------------------------------- */
 /* Pricing                                                                   */
 /* ------------------------------------------------------------------------- */
@@ -569,6 +683,8 @@ fn provider_root(provider: UsageProvider) -> Option<PathBuf> {
             Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir).join("sessions")),
             _ => dirs::home_dir().map(|home| home.join(".codex/sessions")),
         },
+        // `PI_CODING_AGENT_DIR` (documented by choco-pi) or `~/.pi/agent`.
+        UsageProvider::ChocoPi => crate::pi_session::pi_agent_dir().map(|dir| dir.join("sessions")),
     }
 }
 
@@ -626,6 +742,7 @@ fn read_transcript_records(path: &Path, provider: UsageProvider) -> Option<Vec<U
     let mut line = String::new();
     let mut records = Vec::new();
     let mut codex_state = CodexScanState::new();
+    let mut pi_state = PiScanState::new();
     let mut seen_in_file = HashSet::new();
 
     loop {
@@ -667,6 +784,21 @@ fn read_transcript_records(path: &Path, provider: UsageProvider) -> Option<Vec<U
                     records.push(record);
                 }
             }
+            UsageProvider::ChocoPi => {
+                // The header names the session and project for every usage
+                // line after it, so it bypasses the usage gate.
+                if !might_carry_usage(&line, provider) && !line.contains("\"session\"") {
+                    continue;
+                }
+                if let Some(record) = parse_pi_line(&line, &mut pi_state) {
+                    if let Some(key) = &record.dedupe_key
+                        && !seen_in_file.insert(key.clone())
+                    {
+                        continue;
+                    }
+                    records.push(record);
+                }
+            }
         }
     }
     Some(records)
@@ -698,7 +830,7 @@ struct Bucket {
 struct ProjectAccumulator {
     cost_usd: f64,
     total_tokens: u64,
-    by_provider: [ProviderDay; 2],
+    by_provider: [ProviderDay; 3],
     sessions: HashSet<(UsageProvider, String)>,
     /// Cost per model, for the row's "top models" caption.
     models: HashMap<String, f64>,
@@ -968,7 +1100,7 @@ fn derive_history(
             day: *day,
             cost_usd: 0.0,
             total_tokens: 0,
-            by_provider: [ProviderDay::default(); 2],
+            by_provider: [ProviderDay::default(); 3],
         });
         day_entry.cost_usd += bucket.cost_usd;
         day_entry.total_tokens += tokens;
@@ -1028,7 +1160,7 @@ fn derive_history(
                 first_day: first_of_month(day.day),
                 cost_usd: 0.0,
                 total_tokens: 0,
-                by_provider: [ProviderDay::default(); 2],
+                by_provider: [ProviderDay::default(); 3],
                 sessions: 0,
                 active_days: 0,
                 top_models: Vec::new(),
@@ -1416,6 +1548,167 @@ mod tests {
         .expect("a full-second gap ends copy suppression");
         assert_eq!(child.session_id, "child");
         assert_eq!(child.totals.total(), 330);
+    }
+
+    /// A real choco-pi transcript (header, model/thinking changes, three
+    /// assistant turns) with message text elided.
+    const PI_SESSION: &str = include_str!("fixtures/pi_usage_session.jsonl");
+
+    #[test]
+    fn pi_lines_parse_usage_with_reported_cost_and_session_project() {
+        let mut state = PiScanState::new();
+        let records: Vec<UsageRecord> = PI_SESSION
+            .lines()
+            .filter_map(|line| parse_pi_line(line, &mut state))
+            .collect();
+        assert_eq!(records.len(), 3);
+        let first = &records[0];
+        assert_eq!(first.provider, UsageProvider::ChocoPi);
+        assert_eq!(first.model, "claude-fable-5-1");
+        assert_eq!(first.session_id, "01a1295d-078e-74f8-9b93-1bacf55a4fb4");
+        assert_eq!(first.project, "/Users/Nebuleto/Workspace/choco-pi");
+        assert_eq!(
+            first.dedupe_key.as_deref(),
+            Some("pi:35411c8d:2026-10-11T05:09:52.829Z")
+        );
+        assert_eq!(first.totals.uncached_input, 4);
+        assert_eq!(first.totals.cached_input, 22026);
+        assert_eq!(first.totals.cache_creation, 463);
+        assert_eq!(first.totals.output, 464);
+        assert_eq!(first.totals.reasoning, 86);
+        // Matches Pi's own totalTokens: reasoning is not added on top.
+        assert_eq!(first.totals.total(), 22957);
+        assert!((first.reported_cost_usd.unwrap() - 0.0380065).abs() < 1e-12);
+
+        // A zero reported cost means Pi could not price the model; leave it
+        // to the rate table instead of recording a silent $0.
+        let unpriced = PI_SESSION
+            .lines()
+            .find(|line| {
+                line.contains("\"role\":\"assistant\"") || line.contains("\"role\": \"assistant\"")
+            })
+            .unwrap()
+            .replace("\"total\": 0.0380065", "\"total\": 0")
+            .replace("\"total\":0.0380065", "\"total\":0");
+        let mut zero_state = PiScanState::new();
+        let zero = parse_pi_line(&unpriced, &mut zero_state).unwrap();
+        assert_eq!(zero.reported_cost_usd, None);
+
+        let mut totals = TokenTotals::default();
+        for record in &records {
+            totals.add(&record.totals);
+        }
+        assert_eq!(totals.total(), 22957 + 34880 + 45512);
+        assert_eq!(totals.reasoning, 86 + 68);
+        let cost: f64 = records.iter().filter_map(|r| r.reported_cost_usd).sum();
+        assert!((cost - (0.0380065 + 0.25990225 + 0.2291255)).abs() < 1e-9);
+
+        // The file reader gates the header through too, and a fork that
+        // copies the same entries under a new session header dedupes away.
+        let dir = std::env::temp_dir().join(format!("waku-pi-usage-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        std::fs::write(&path, PI_SESSION).unwrap();
+        let from_file = read_transcript_records(&path, UsageProvider::ChocoPi).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(from_file.len(), 3);
+        assert_eq!(from_file[2].session_id, first.session_id);
+
+        let fork_header = r#"{"type":"session","version":3,"id":"fork-session",
+            "timestamp":"2026-10-11T07:38:35.471Z","cwd":"/elsewhere"}"#
+            .replace('\n', " ");
+        let mut fork_state = PiScanState::new();
+        assert!(parse_pi_line(&fork_header, &mut fork_state).is_none());
+        let copied: Vec<UsageRecord> = PI_SESSION
+            .lines()
+            .skip(1)
+            .filter_map(|line| parse_pi_line(line, &mut fork_state))
+            .collect();
+        assert_eq!(copied[0].session_id, "fork-session");
+        assert_eq!(copied[0].dedupe_key, first.dedupe_key);
+
+        let today = Local::now().date_naive();
+        let since = chrono::NaiveDate::from_ymd_opt(2026, 10, 1)
+            .unwrap()
+            .min(today);
+        let until = chrono::NaiveDate::from_ymd_opt(2026, 10, 31)
+            .unwrap()
+            .max(today);
+        let mut aggregator = Aggregator::new(since, until, &[]);
+        for record in records.iter().chain(&copied) {
+            aggregator.add(record, &RateTable::unavailable());
+        }
+        let history = derive_history(
+            aggregator,
+            UsageWindow::TrailingDays(30),
+            since,
+            until,
+            PricingStatus::Unavailable,
+            2,
+            0,
+            Vec::new(),
+            Duration::ZERO,
+        );
+        assert_eq!(history.records, 3);
+        assert_eq!(history.sessions, 1);
+
+        // Non-assistant messages and messages without usage count nothing.
+        let user = r#"{"type":"message","id":"u1","timestamp":"2026-10-11T05:09:00.000Z",
+            "message":{"role":"user","model":"m","usage":{"input":5}}}"#
+            .replace('\n', " ");
+        assert!(parse_pi_line(&user, &mut state).is_none());
+        let no_model = r#"{"type":"message","id":"a1","timestamp":"2026-10-11T05:09:00.000Z",
+            "message":{"role":"assistant","model":"","usage":{"input":5}}}"#
+            .replace('\n', " ");
+        assert!(parse_pi_line(&no_model, &mut state).is_none());
+    }
+
+    #[test]
+    fn pi_records_use_reported_cost_over_the_rate_table() {
+        // A rate table that would price the record very differently.
+        let rates = rate_table(&[("claude-fable-5-1", FLAT_RATE)]);
+        let record = UsageRecord {
+            provider: UsageProvider::ChocoPi,
+            timestamp_ms: Local::now().timestamp_millis(),
+            model: "claude-fable-5-1".to_owned(),
+            session_id: "pi-session".to_owned(),
+            project: "/Users/me/dev/waku".to_owned(),
+            totals: TokenTotals {
+                uncached_input: 4,
+                cached_input: 22_026,
+                cache_creation: 463,
+                output: 464,
+                reasoning: 86,
+            },
+            reported_cost_usd: Some(0.0380065),
+            dedupe_key: Some("pi:35411c8d:2026-10-11T05:09:52.829Z".to_owned()),
+        };
+        let today = Local::now().date_naive();
+        let since = today - chrono::Days::new(29);
+        let mut aggregator = Aggregator::new(since, today, &[]);
+        aggregator.add(&record, &rates);
+        let history = derive_history(
+            aggregator,
+            UsageWindow::TrailingDays(30),
+            since,
+            today,
+            PricingStatus::Fresh,
+            1,
+            0,
+            Vec::new(),
+            Duration::ZERO,
+        );
+        assert!((history.cost_usd - 0.0380065).abs() < 1e-12);
+        assert!((history.quality.provider_reported_share - 1.0).abs() < f64::EPSILON);
+        assert_eq!(history.quality.model_priced_share, 0.0);
+        assert_eq!(history.providers.len(), 1);
+        assert_eq!(history.providers[0].provider, UsageProvider::ChocoPi);
+        let day = &history.daily[0];
+        assert!((day.by_provider[2].cost_usd - 0.0380065).abs() < 1e-12);
+        assert_eq!(day.by_provider[2].total_tokens, 22_957);
+        assert_eq!(day.by_provider[0].total_tokens, 0);
+        assert_eq!(history.projects[0].by_provider[2].total_tokens, 22_957);
+        assert_eq!(history.months[0].by_provider[2].total_tokens, 22_957);
     }
 
     #[test]

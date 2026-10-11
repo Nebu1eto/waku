@@ -28,10 +28,24 @@ const CHART_GUTTER: f32 = 56.0;
 const USAGE_PROJECT_ROW_HEIGHT: f32 = 96.0;
 /// A snapshot older than this rescans when the page is next opened.
 const USAGE_RESCAN_AFTER: Duration = Duration::from_secs(120);
+/// Width of every per-provider array, in `UsageProvider::ALL` order.
+const USAGE_PROVIDER_COUNT: usize = UsageProvider::ALL.len();
 fn provider_kind(provider: UsageProvider) -> ProviderKind {
     match provider {
         UsageProvider::Claude => ProviderKind::Claude,
         UsageProvider::Codex => ProviderKind::Codex,
+        UsageProvider::ChocoPi => ProviderKind::ChocoPi,
+    }
+}
+
+/// A provider's color on the Usage page. choco-pi's brand mark is the same
+/// neutral as Codex's, which would make their chart series and split-bar
+/// segments indistinguishable, so it gets a page-local hue instead.
+fn usage_color(theme: &Theme, provider: ProviderKind) -> Hsla {
+    match provider {
+        ProviderKind::ChocoPi if theme.is_dark => rgb(0x9E8CFC).into(),
+        ProviderKind::ChocoPi => rgb(0x6E56CF).into(),
+        _ => provider_color(theme, provider),
     }
 }
 
@@ -475,7 +489,7 @@ impl Waku {
         }
         for provider in &providers {
             let kind = provider_kind(provider.provider);
-            let color = provider_color(theme, kind);
+            let color = usage_color(theme, kind);
             let share = match metric {
                 UsageMetric::Cost => provider.cost_share,
                 UsageMetric::Tokens => provider.token_share,
@@ -614,7 +628,7 @@ impl Waku {
                     .flex()
                     .items_center()
                     .gap(px(5.0))
-                    .child(provider_mark(kind, 12.0, provider_color(theme, kind)))
+                    .child(provider_mark(kind, 12.0, usage_color(theme, kind)))
                     .child(
                         div()
                             .text_size(sp(12.5))
@@ -698,7 +712,7 @@ impl Waku {
         // One column per day, per provider in ALL order. The chart paths and
         // the hover readout both consume this, so the number under the cursor
         // is by construction the number that was plotted.
-        let series: Vec<[f64; 2]> = days
+        let series: Vec<[f64; USAGE_PROVIDER_COUNT]> = days
             .iter()
             .map(|day| {
                 let slice = history.day(*day);
@@ -713,7 +727,7 @@ impl Waku {
                         })
                         .unwrap_or(0.0)
                 };
-                [value(UsageProvider::Claude), value(UsageProvider::Codex)]
+                UsageProvider::ALL.map(value)
             })
             .collect();
         // The scale tops out at the largest single provider-day, not the
@@ -760,10 +774,7 @@ impl Waku {
         }
 
         let hover = self.usage_chart_hover.filter(|index| *index < day_count);
-        let colors = [
-            provider_color(theme, ProviderKind::Claude),
-            provider_color(theme, ProviderKind::Codex),
-        ];
+        let colors = usage_provider_colors(theme);
         let bounds_cell = self.usage_chart_bounds.clone();
         let paint_series = series.clone();
         let paint_ticks = ticks.clone();
@@ -1531,7 +1542,7 @@ fn usage_chart_readout(
                 .flex()
                 .items_center()
                 .gap(px(10.0))
-                .child(provider_mark(kind, 11.0, provider_color(theme, kind)))
+                .child(provider_mark(kind, 11.0, usage_color(theme, kind)))
                 .child(
                     div()
                         .flex_1()
@@ -1741,7 +1752,7 @@ fn usage_model_table(history: &UsageHistory, theme: &Theme) -> Div {
                         .flex()
                         .items_center()
                         .gap(px(7.0))
-                        .child(provider_mark(kind, 12.0, provider_color(theme, kind)))
+                        .child(provider_mark(kind, 12.0, usage_color(theme, kind)))
                         .child(
                             div()
                                 .min_w_0()
@@ -2060,11 +2071,8 @@ fn rank_by_cost(history: &UsageHistory) -> bool {
     history.cost_usd > 0.0
 }
 
-fn usage_provider_colors(theme: &Theme) -> [Hsla; 2] {
-    [
-        provider_color(theme, ProviderKind::Claude),
-        provider_color(theme, ProviderKind::Codex),
-    ]
+fn usage_provider_colors(theme: &Theme) -> [Hsla; USAGE_PROVIDER_COUNT] {
+    UsageProvider::ALL.map(|provider| usage_color(theme, provider_kind(provider)))
 }
 
 /// The period total in the ranking unit.
@@ -2141,16 +2149,13 @@ fn usage_list_empty_row(theme: &Theme, message: String) -> Div {
 /// one glance carries both size and mix.
 fn usage_split_bar(
     theme: &Theme,
-    colors: [Hsla; 2],
+    colors: [Hsla; USAGE_PROVIDER_COUNT],
     length: f32,
-    by_provider: &[ProviderDay; 2],
+    by_provider: &[ProviderDay; USAGE_PROVIDER_COUNT],
     by_cost: bool,
 ) -> Div {
-    let values = [
-        usage_provider_value(&by_provider[0], by_cost),
-        usage_provider_value(&by_provider[1], by_cost),
-    ];
-    let sum = values[0] + values[1];
+    let values = by_provider.map(|entry| usage_provider_value(&entry, by_cost));
+    let sum: f64 = values.iter().sum();
     let length = if length > 0.0 {
         length.clamp(0.02, 1.0)
     } else {
@@ -2192,7 +2197,11 @@ fn usage_provider_value(entry: &ProviderDay, by_cost: bool) -> f64 {
 
 /// Per-provider amounts with their marks, skipping providers absent from
 /// the row.
-fn usage_provider_values(theme: &Theme, by_provider: &[ProviderDay; 2], by_cost: bool) -> Div {
+fn usage_provider_values(
+    theme: &Theme,
+    by_provider: &[ProviderDay; USAGE_PROVIDER_COUNT],
+    by_cost: bool,
+) -> Div {
     let mut row = div().flex().items_center().gap(px(14.0));
     for provider in UsageProvider::ALL {
         let entry = by_provider[provider.index()];
@@ -2205,7 +2214,7 @@ fn usage_provider_values(theme: &Theme, by_provider: &[ProviderDay; 2], by_cost:
                 .flex()
                 .items_center()
                 .gap(px(5.0))
-                .child(provider_mark(kind, 11.0, provider_color(theme, kind)))
+                .child(provider_mark(kind, 11.0, usage_color(theme, kind)))
                 .child(
                     div()
                         .text_size(sp(12.5))
@@ -2318,21 +2327,20 @@ fn usage_month_strip(
     first_day: NaiveDate,
     peak: f64,
     by_cost: bool,
-    colors: [Hsla; 2],
+    colors: [Hsla; USAGE_PROVIDER_COUNT],
 ) -> impl IntoElement {
     let day_count = usage_history::days_in_month(first_day);
-    let values: Vec<[f64; 2]> = (0..day_count)
+    let values: Vec<[f64; USAGE_PROVIDER_COUNT]> = (0..day_count)
         .map(|offset| {
             let day = first_day + chrono::Days::new(u64::from(offset));
             history
                 .day(day)
                 .map(|slice| {
-                    [
-                        usage_provider_value(&slice.by_provider[0], by_cost),
-                        usage_provider_value(&slice.by_provider[1], by_cost),
-                    ]
+                    slice
+                        .by_provider
+                        .map(|entry| usage_provider_value(&entry, by_cost))
                 })
-                .unwrap_or([0.0, 0.0])
+                .unwrap_or([0.0; USAGE_PROVIDER_COUNT])
         })
         .collect();
     canvas(
@@ -2496,7 +2504,7 @@ fn usage_month_row(
     history: &UsageHistory,
     month: &MonthSlice,
     theme: &Theme,
-    colors: [Hsla; 2],
+    colors: [Hsla; USAGE_PROVIDER_COUNT],
     by_cost: bool,
     peak: f64,
     day_peak: f64,

@@ -93,15 +93,21 @@ use chrono::Datelike as _;
 pub enum UsageProvider {
     Claude,
     Codex,
+    ChocoPi,
 }
 
 impl UsageProvider {
-    pub const ALL: [UsageProvider; 2] = [UsageProvider::Claude, UsageProvider::Codex];
+    pub const ALL: [UsageProvider; 3] = [
+        UsageProvider::Claude,
+        UsageProvider::Codex,
+        UsageProvider::ChocoPi,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             UsageProvider::Claude => "Claude Code",
             UsageProvider::Codex => "Codex",
+            UsageProvider::ChocoPi => "choco-pi",
         }
     }
 
@@ -109,6 +115,7 @@ impl UsageProvider {
         match self {
             UsageProvider::Claude => 0,
             UsageProvider::Codex => 1,
+            UsageProvider::ChocoPi => 2,
         }
     }
 }
@@ -178,7 +185,7 @@ pub struct DaySlice {
     pub day: NaiveDate,
     pub cost_usd: f64,
     pub total_tokens: u64,
-    pub by_provider: [ProviderDay; 2],
+    pub by_provider: [ProviderDay; 3],
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, TS)]
@@ -196,7 +203,7 @@ pub struct MonthSlice {
     pub first_day: NaiveDate,
     pub cost_usd: f64,
     pub total_tokens: u64,
-    pub by_provider: [ProviderDay; 2],
+    pub by_provider: [ProviderDay; 3],
     pub sessions: u64,
     pub active_days: u32,
     pub top_models: Vec<(String, f64)>,
@@ -208,7 +215,7 @@ pub struct ProjectSlice {
     pub path: String,
     pub cost_usd: f64,
     pub total_tokens: u64,
-    pub by_provider: [ProviderDay; 2],
+    pub by_provider: [ProviderDay; 3],
     pub sessions: u64,
     pub cost_share: f64,
     pub last_day: Option<NaiveDate>,

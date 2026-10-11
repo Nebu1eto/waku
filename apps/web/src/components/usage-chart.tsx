@@ -5,6 +5,7 @@ import { scaleLinear } from '@tanstack/charts/scales/linear'
 import { tooltip } from '@tanstack/charts/tooltip'
 import type { UsageHistory } from '@waku/client'
 import { scaleUtc } from 'd3-scale'
+import { USAGE_PROVIDERS, usageProviderEntries } from '@/components/usage-providers'
 import { useI18n, type AppLocale } from '@/lib/i18n'
 
 export type UsageMetric = 'cost' | 'tokens'
@@ -12,7 +13,7 @@ export type UsageMetric = 'cost' | 'tokens'
 interface UsageChartRow {
   id: string
   date: Date
-  provider: 'Claude Code' | 'Codex'
+  provider: string
   value: number
 }
 
@@ -26,20 +27,12 @@ export function UsageTrendChart({
   const { locale, t } = useI18n()
   const rows: UsageChartRow[] = history.daily.flatMap((day) => {
     const date = parseUsageDay(day.day)
-    return [
-      {
-        id: `claude-${day.day}`,
-        date,
-        provider: 'Claude Code',
-        value: metric === 'cost' ? day.byProvider[0].costUsd : day.byProvider[0].totalTokens,
-      },
-      {
-        id: `codex-${day.day}`,
-        date,
-        provider: 'Codex',
-        value: metric === 'cost' ? day.byProvider[1].costUsd : day.byProvider[1].totalTokens,
-      },
-    ]
+    return usageProviderEntries(day.byProvider).map(([provider, entry]) => ({
+      id: `${provider.id}-${day.day}`,
+      date,
+      provider: provider.label,
+      value: metric === 'cost' ? entry.costUsd : entry.totalTokens,
+    }))
   })
 
   const definition = defineChart({
@@ -98,8 +91,8 @@ export function UsageTrendChart({
       },
     },
     color: {
-      domain: ['Claude Code', 'Codex'],
-      range: ['#d97757', 'var(--provider-codex)'],
+      domain: USAGE_PROVIDERS.map((provider) => provider.label),
+      range: USAGE_PROVIDERS.map((provider) => provider.color),
     },
     focus: 'group-x',
     maxFocusDistance: Number.POSITIVE_INFINITY,

@@ -7,12 +7,14 @@ import type {
   ProviderDay,
   ProviderSlice,
   UsageHistory,
+  UsageProvider,
   UsageWindow,
 } from '@waku/client'
 import { useState, type ReactNode } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import { ControlMenu } from '@/components/control-menu'
 import { UsageTrendChart, type UsageMetric } from '@/components/usage-chart'
+import { USAGE_PROVIDERS, usageProviderEntries, usageProviderStyle } from '@/components/usage-providers'
 import { ProviderIcon, WakuIcon } from '@/components/waku-icon'
 import { useUsageHistory } from '@/hooks/use-daemon-data'
 import { useI18n, type AppLocale } from '@/lib/i18n'
@@ -143,8 +145,7 @@ function DailyUsage({
               value={metric}
               onChange={(next) => onMetricChange(next as UsageMetric)}
             />
-            <ProviderLegend provider="claude" label="Claude Code" />
-            <ProviderLegend provider="codex" label="Codex" />
+            {USAGE_PROVIDERS.map((provider) => <ProviderLegend key={provider.id} provider={provider.id} />)}
           </div>
           <div className="mt-2 min-w-0">
             <UsageTrendChart history={history} metric={metric} />
@@ -219,12 +220,12 @@ function ProviderSummary({ provider, metric }: { provider: ProviderSlice; metric
   return (
     <div>
       <div className="flex items-center gap-2">
-        <ProviderIcon className={cn('size-3.5', provider.provider === 'claude' ? 'text-[#d97757]' : 'text-foreground')} provider={provider.provider} />
-        <div className="min-w-0 flex-1 truncate text-[12.5px]">{provider.provider === 'claude' ? 'Claude Code' : 'Codex'}</div>
+        <ProviderIcon className={cn('size-3.5', usageProviderStyle(provider.provider).iconClass)} provider={provider.provider} />
+        <div className="min-w-0 flex-1 truncate text-[12.5px]">{usageProviderStyle(provider.provider).label}</div>
         <div className="text-[12.5px] tabular-nums">{value}</div>
       </div>
       <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--inset)]">
-        <div className={cn('h-full rounded-full', provider.provider === 'claude' ? 'bg-[#d97757]' : 'bg-[var(--provider-codex)]')} style={{ width: `${Math.max(0, Math.min(100, share * 100))}%` }} />
+        <div className={cn('h-full rounded-full', usageProviderStyle(provider.provider).barClass)} style={{ width: `${Math.max(0, Math.min(100, share * 100))}%` }} />
       </div>
       <div className="mt-1 text-[10.5px] text-[var(--text-tertiary)]">{detail}</div>
     </div>
@@ -271,7 +272,7 @@ function ModelTable({ models }: { models: ModelSlice[] }) {
       {models.length ? models.map((model) => (
         <div className="flex min-w-[500px] items-center gap-3 border-b py-2 text-[11.5px]" key={`${model.provider}:${model.model}`}>
           <span className="flex min-w-0 flex-1 items-center gap-2">
-            <ProviderIcon className={cn('size-3', model.provider === 'claude' ? 'text-[#d97757]' : 'text-foreground')} provider={model.provider} />
+            <ProviderIcon className={cn('size-3', usageProviderStyle(model.provider).iconClass)} provider={model.provider} />
             <span className="truncate">{model.model}</span>
           </span>
           <span className="w-20 text-right tabular-nums">{formatMoney(model.costUsd, locale)}</span>
@@ -287,13 +288,14 @@ function DayTable({ days }: { days: DaySlice[] }) {
   const { locale, t } = useI18n()
   return (
     <UsageTable
-      columns={<><span className="flex-1">{t('usage.day')}</span><span className="w-20 text-right">Claude Code</span><span className="w-20 text-right">Codex</span><span className="w-20 text-right">{t('usage.total')}</span><span className="w-20 text-right">{t('usage.tokens')}</span></>}
+      columns={<><span className="flex-1">{t('usage.day')}</span>{USAGE_PROVIDERS.map((provider) => <span className="w-20 text-right" key={provider.id}>{provider.label}</span>)}<span className="w-20 text-right">{t('usage.total')}</span><span className="w-20 text-right">{t('usage.tokens')}</span></>}
     >
       {days.length ? [...days].reverse().slice(0, 8).map((day) => (
-        <div className="flex min-w-[600px] items-center gap-3 border-b py-2 text-[11.5px]" key={day.day}>
+        <div className="flex min-w-[700px] items-center gap-3 border-b py-2 text-[11.5px]" key={day.day}>
           <span className="flex-1">{formatDay(day.day, locale)}</span>
-          <span className="w-20 text-right tabular-nums text-[var(--text-tertiary)]">{formatMoney(day.byProvider[0].costUsd, locale)}</span>
-          <span className="w-20 text-right tabular-nums text-[var(--text-tertiary)]">{formatMoney(day.byProvider[1].costUsd, locale)}</span>
+          {usageProviderEntries(day.byProvider).map(([provider, entry]) => (
+            <span className="w-20 text-right tabular-nums text-[var(--text-tertiary)]" key={provider.id}>{formatMoney(entry.costUsd, locale)}</span>
+          ))}
           <span className="w-20 text-right tabular-nums">{formatMoney(day.costUsd, locale)}</span>
           <span className="w-20 text-right tabular-nums text-[var(--text-tertiary)]">{formatNumber(day.totalTokens, locale)}</span>
         </div>
@@ -395,8 +397,9 @@ function MonthUsageRow({
       </div>
       <UsageSplitBar byProvider={month.byProvider} byCost={byCost} length={peak ? usageValue(month, byCost) / peak : 0} />
       <div className="mt-1.5 flex items-center gap-3 text-[9.5px] text-[var(--text-tertiary)]">
-        <ProviderValue provider="claude" value={providerValue(month.byProvider[0], byCost)} byCost={byCost} locale={locale} />
-        <ProviderValue provider="codex" value={providerValue(month.byProvider[1], byCost)} byCost={byCost} locale={locale} />
+        {usageProviderEntries(month.byProvider).map(([provider, entry]) => (
+          <ProviderValue key={provider.id} provider={provider.id} value={providerValue(entry, byCost)} byCost={byCost} locale={locale} />
+        ))}
         <span className="min-w-0 flex-1 truncate text-right">{topModelsLabel(month.topModels)}</span>
       </div>
     </div>
@@ -495,8 +498,9 @@ function ProjectUsageRow({
       <div className="mt-0.5 truncate text-[10.5px] text-[var(--text-tertiary)]">{caption}</div>
       <UsageSplitBar byProvider={project.byProvider} byCost={byCost} length={peak ? usageValue(project, byCost) / peak : 0} />
       <div className="mt-1.5 flex items-center gap-3 text-[9.5px] text-[var(--text-tertiary)]">
-        <ProviderValue provider="claude" value={providerValue(project.byProvider[0], byCost)} byCost={byCost} locale={locale} />
-        <ProviderValue provider="codex" value={providerValue(project.byProvider[1], byCost)} byCost={byCost} locale={locale} />
+        {usageProviderEntries(project.byProvider).map(([provider, entry]) => (
+          <ProviderValue key={provider.id} provider={provider.id} value={providerValue(entry, byCost)} byCost={byCost} locale={locale} />
+        ))}
         <span className="min-w-0 flex-1 truncate text-right">{topModelsLabel(project.topModels)}</span>
       </div>
     </div>
@@ -521,15 +525,15 @@ function UsageListCard({ title, caption, total, action, children }: { title: str
   )
 }
 
-function UsageSplitBar({ byProvider, byCost, length }: { byProvider: [ProviderDay, ProviderDay]; byCost: boolean; length: number }) {
-  const claude = providerValue(byProvider[0], byCost)
-  const codex = providerValue(byProvider[1], byCost)
-  const total = claude + codex
+function UsageSplitBar({ byProvider, byCost, length }: { byProvider: DaySlice['byProvider']; byCost: boolean; length: number }) {
+  const segments = usageProviderEntries(byProvider).map(([provider, entry]) => [provider, providerValue(entry, byCost)] as const)
+  const total = segments.reduce((sum, [, value]) => sum + value, 0)
   return (
     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--inset)]">
       <div className="flex h-full min-w-px overflow-hidden rounded-full" style={{ width: `${Math.max(0, Math.min(100, length * 100))}%` }}>
-        <div className="h-full bg-[#d97757]" style={{ width: `${total ? claude / total * 100 : 0}%` }} />
-        <div className="h-full bg-[var(--provider-codex)]" style={{ width: `${total ? codex / total * 100 : 0}%` }} />
+        {segments.map(([provider, value]) => (
+          <div className={cn('h-full', provider.barClass)} key={provider.id} style={{ width: `${total ? value / total * 100 : 0}%` }} />
+        ))}
       </div>
     </div>
   )
@@ -542,12 +546,15 @@ function MonthActivityStrip({ history, month, byCost }: { history: UsageHistory;
     <div className="flex h-5 w-[168px] shrink-0 items-end gap-px" aria-hidden="true">
       {days.map((day) => {
         const value = byCost ? day.costUsd : day.totalTokens
-        const claude = providerValue(day.byProvider[0], byCost)
-        const total = claude + providerValue(day.byProvider[1], byCost)
+        const segments = usageProviderEntries(day.byProvider).map(([provider, entry]) => [provider, providerValue(entry, byCost)] as const)
+        const total = segments.reduce((sum, [, band]) => sum + band, 0)
         return (
+          // Column-reverse stacks the first child at the bottom; reversing
+          // keeps Claude on top as before.
           <div className="flex h-full min-w-px flex-1 flex-col-reverse overflow-hidden rounded-t-[1px] bg-[var(--inset)]" key={day.day}>
-            <div className="w-full bg-[var(--provider-codex)]" style={{ height: `${peak ? value / peak * 100 * (total ? 1 - claude / total : 0) : 0}%` }} />
-            <div className="w-full bg-[#d97757]" style={{ height: `${peak ? value / peak * 100 * (total ? claude / total : 0) : 0}%` }} />
+            {[...segments].reverse().map(([provider, band]) => (
+              <div className={cn('w-full', provider.barClass)} key={provider.id} style={{ height: `${peak ? value / peak * 100 * (total ? band / total : 0) : 0}%` }} />
+            ))}
           </div>
         )
       })}
@@ -561,24 +568,25 @@ function ProviderValue({
   byCost,
   locale,
 }: {
-  provider: 'claude' | 'codex'
+  provider: UsageProvider
   value: number
   byCost: boolean
   locale: AppLocale
 }) {
   return (
     <span className="flex items-center gap-1.5">
-      <ProviderIcon className={cn('size-[11px]', provider === 'claude' ? 'text-[#d97757]' : 'text-foreground')} provider={provider} />
+      <ProviderIcon className={cn('size-[11px]', usageProviderStyle(provider).iconClass)} provider={provider} />
       {byCost ? formatMoney(value, locale) : formatNumber(value, locale)}
     </span>
   )
 }
 
-function ProviderLegend({ provider, label }: { provider: 'claude' | 'codex'; label: string }) {
+function ProviderLegend({ provider }: { provider: UsageProvider }) {
+  const style = usageProviderStyle(provider)
   return (
     <span className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-secondary)]">
-      <ProviderIcon className={cn('size-3', provider === 'claude' ? 'text-[#d97757]' : 'text-foreground')} provider={provider} />
-      {label}
+      <ProviderIcon className={cn('size-3', style.iconClass)} provider={provider} />
+      {style.label}
     </span>
   )
 }
