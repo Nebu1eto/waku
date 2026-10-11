@@ -1908,7 +1908,7 @@ function UsageMeter({
   // A context report (choco-pi) adds its breakdown, and its estimate stands
   // in until the provider has measured a model call.
   const contextReport = session.latest_context_report?.context ?? null
-  const { usage: context, estimated } = meterUsage(session.context_usage, contextReport)
+  const { usage: context, estimated } = meterUsage(session.context_usage, contextReport, session.model)
   const mark = estimateMark(estimated)
   const contextPercent = context?.window
     ? context.tokens * 100 / context.window

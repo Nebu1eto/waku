@@ -54,6 +54,25 @@ describe('context report meter', () => {
     })
   })
 
+  test('a report for the current model owns the window', () => {
+    const model = 'anthropic/claude-haiku-5-5'
+    const capped: ContextReport = { ...report(null), model, contextWindow: 600_000 }
+    const streamed = { tokens: 19_300, window: 1_000_000 }
+    // Same model (or an unknown session model): the report's cap wins.
+    expect(meterUsage(streamed, capped, model)).toEqual({
+      usage: { tokens: 19_300, window: 600_000 },
+      estimated: false,
+    })
+    expect(meterUsage(streamed, capped, null).usage?.window).toBe(600_000)
+    // A report for another model is stale: the streamed window wins.
+    expect(meterUsage(streamed, capped, 'anthropic/claude-opus-5-5')).toEqual({
+      usage: streamed,
+      estimated: false,
+    })
+    // No report: unchanged.
+    expect(meterUsage(streamed, null, model)).toEqual({ usage: streamed, estimated: false })
+  })
+
   test('breakdown ends with free space then the reserve', () => {
     const segments = breakdownSegments(report(null))
     expect(segments.map((segment) => [segment.part.kind, segment.tokens])).toEqual([

@@ -14,18 +14,35 @@ export function estimateMark(estimated: boolean) {
  * The meter's occupancy and whether it is the provider's estimate. Mirrors
  * the desktop's `meter_usage`: a fresh choco-pi session has measured nothing
  * yet, so its context report's estimate stands in for what would otherwise
- * read 0%. Streamed usage wins once a model call has measured anything.
+ * read 0%. Streamed usage wins once a model call has measured anything. A
+ * report for the session's current model owns the window: its effective cap
+ * (choco-pi's 600K) beats the raw model window the stream carries. A report
+ * for another model is stale, so the streamed window wins over it.
  */
 export function meterUsage(
   context: ContextUsage | null | undefined,
   report: ContextReport | null | undefined,
+  sessionModel?: string | null,
 ): { usage: ContextUsage | null; estimated: boolean } {
   if (!report) return { usage: context ?? null, estimated: false }
-  const window = context?.window || report.contextWindow || null
+  const window = reportApplies(report, sessionModel)
+    ? report.contextWindow || context?.window || null
+    : context?.window || report.contextWindow || null
   if (context && context.tokens > 0) return { usage: { ...context, window }, estimated: false }
   return report.measuredTokens == null
     ? { usage: { tokens: report.estimatedTokens, window }, estimated: true }
     : { usage: { tokens: report.measuredTokens, window }, estimated: false }
+}
+
+/**
+ * Whether a context report describes the session's current model. An unknown
+ * model on either side cannot contradict it. Mirrors the desktop's
+ * `report_applies`.
+ */
+function reportApplies(report: ContextReport, sessionModel: string | null | undefined) {
+  const reported = report.model?.trim()
+  const active = sessionModel?.trim()
+  return !reported || !active || reported === active
 }
 
 export type BreakdownPart =
