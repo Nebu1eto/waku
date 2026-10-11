@@ -32,6 +32,32 @@ fn push_provider_notice(session: &mut AgentSession, in_turn: bool, message: Stri
     session.updated_at = unix_time();
 }
 
+/// Applies a provider report. A `context` report becomes the session's live
+/// context breakdown; an invoked one is also shown as a card where its
+/// command's notice would have been, keeping that notice as plain text.
+/// Returns whether a card was appended.
+fn apply_provider_report(
+    session: &mut AgentSession,
+    in_turn: bool,
+    report: Box<ProviderReport>,
+    invoked: bool,
+    notice: Option<String>,
+) -> bool {
+    if invoked {
+        let content = notice
+            .filter(|notice| !notice.trim().is_empty())
+            .unwrap_or_else(|| report.title.clone());
+        push_provider_notice(session, in_turn, content);
+        if let Some(card) = session.messages.last_mut() {
+            card.report = Some(report.clone());
+        }
+    }
+    if report.kind == ProviderReportKind::Context {
+        session.latest_context_report = Some(report);
+    }
+    invoked
+}
+
 /// Whether the running turn already shows the user a reply: assistant text,
 /// or — when it succeeded — a notice from a command that answers only that
 /// way (choco-pi's `/context`, `/daybreak on`). A failed turn still needs
@@ -787,6 +813,27 @@ impl Waku {
                     self.state.mark_session_dirty(session_id);
                 }
             }
+            DriverEvent::Report {
+                report,
+                invoked,
+                notice,
+            } => {
+                // An invoked report stands in for its command's notice, so it
+                // ends a streaming reply the same way.
+                let in_turn = invoked && self.accepts_turn_output(session_id);
+                if in_turn {
+                    if runtime.stream_phase == Some(StreamPhase::Reasoning) {
+                        self.complete_reasoning_activity(session_id);
+                    }
+                    self.finish_streaming_assistant(session_id);
+                    runtime.stream_phase = None;
+                }
+                if let Some(session) = self.state.session_mut(session_id)
+                    && apply_provider_report(session, in_turn, report, invoked, notice)
+                {
+                    self.state.mark_session_dirty(session_id);
+                }
+            }
             DriverEvent::Error(error) => {
                 let error = compact_driver_error(&error);
                 runtime.last_driver_error = Some(error.clone());
@@ -1174,5 +1221,64 @@ mod tests {
         // outside it.
         push_provider_notice(&mut session, false, "late".into());
         assert!(!active_turn_has_reply(&session, true));
+    }
+
+    fn report(kind: &str, title: &str) -> Box<ProviderReport> {
+        let context = if kind == "context" {
+            r#","context":{"contextWindow":200000,"measuredTokens":null,"estimatedTokens":9000,
+                "autocompactReserve":16000,"categories":[{"label":"System","tokens":9000,"estimated":true}]}"#
+        } else {
+            ""
+        };
+        Box::new(
+            ProviderReport::parse(&format!(
+                r#"{{"schema":1,"kind":"{kind}","at":"2026-10-11T08:00:00Z","title":"{title}",
+                    "sections":[]{context}}}"#
+            ))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn automatic_context_reports_update_state_without_a_card() {
+        let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::ChocoPi);
+        assert!(!apply_provider_report(
+            &mut session,
+            false,
+            report("context", "Context Usage"),
+            false,
+            None
+        ));
+        assert!(session.messages.is_empty());
+        assert_eq!(
+            session.latest_context_report.as_ref().unwrap().title,
+            "Context Usage"
+        );
+        // A status report is never the context breakdown.
+        apply_provider_report(&mut session, false, report("status", "Status"), false, None);
+        assert_eq!(
+            session.latest_context_report.as_ref().unwrap().title,
+            "Context Usage"
+        );
+    }
+
+    #[test]
+    fn an_invoked_report_is_the_card_reply_of_its_command_turn() {
+        let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::ChocoPi);
+        let turn_id = session.begin_turn("/status");
+        assert!(apply_provider_report(
+            &mut session,
+            true,
+            report("status", "Status"),
+            true,
+            Some("Status\n  model: opus".into()),
+        ));
+        let card = session.messages.last().unwrap();
+        assert_eq!(card.role, MessageRole::System);
+        assert_eq!(card.turn_id, Some(turn_id));
+        assert_eq!(card.content, "Status\n  model: opus");
+        assert_eq!(card.report.as_ref().unwrap().title, "Status");
+        assert!(session.latest_context_report.is_none());
+        assert!(active_turn_has_reply(&session, true));
     }
 }

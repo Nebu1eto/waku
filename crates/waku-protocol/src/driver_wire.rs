@@ -6,7 +6,9 @@ use uuid::Uuid;
 
 use crate::WireDriverEvent;
 use crate::computer_use::{ComputerTarget, ComputerUsePhase, ComputerUseState};
-use crate::model::{ActivityKind, DriverEvent, NoticeLevel, PermissionOption, UserInputQuestion};
+use crate::model::{
+    ActivityKind, DriverEvent, NoticeLevel, PermissionOption, ProviderReport, UserInputQuestion,
+};
 
 pub fn decode_enum<T: DeserializeOwned>(value: &str) -> anyhow::Result<T> {
     serde_json::from_value(Value::String(value.to_owned()))
@@ -122,6 +124,14 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::Notice { level, message } => {
             ("notice", json!({ "level": level, "message": message }))
         }
+        DriverEvent::Report {
+            report,
+            invoked,
+            notice,
+        } => (
+            "report",
+            json!({ "report": report, "invoked": invoked, "notice": notice }),
+        ),
         DriverEvent::Error(error) => ("error", Value::String(error)),
         DriverEvent::ProcessExited => ("processExited", Value::Null),
     };
@@ -222,6 +232,14 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 message: notice.message,
             }
         }
+        "report" => {
+            let report: ReportWire = serde_json::from_value(payload)?;
+            DriverEvent::Report {
+                report: report.report,
+                invoked: report.invoked,
+                notice: report.notice,
+            }
+        }
         "error" => DriverEvent::Error(serde_json::from_value(payload)?),
         "processExited" => DriverEvent::ProcessExited,
         kind => bail!("daemon sent an unsupported driver event {kind:?}"),
@@ -301,6 +319,15 @@ struct NoticeWire {
     message: String,
 }
 
+#[derive(Deserialize)]
+struct ReportWire {
+    report: Box<ProviderReport>,
+    #[serde(default)]
+    invoked: bool,
+    #[serde(default)]
+    notice: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +347,50 @@ mod tests {
         };
         assert_eq!(level, NoticeLevel::Warning);
         assert_eq!(message, "Context\n  used: 12%");
+    }
+
+    #[test]
+    fn reports_round_trip_through_the_daemon_wire() {
+        let report = ProviderReport::parse(
+            &json!({
+                "schema": 1, "kind": "context", "at": "2026-10-11T08:00:00.000Z",
+                "sessionId": "s1", "title": "Context Usage",
+                "sections": [{"title": "Totals", "rows": [{"label": "Used", "value": "1.2k", "hint": "estimated"}]}],
+                "context": {
+                    "model": "anthropic/claude", "contextWindow": 200000, "measuredTokens": null,
+                    "estimatedTokens": 1234, "autocompactReserve": 16384,
+                    "categories": [{"label": "System prompt", "tokens": 1000, "estimated": true}],
+                    "tools": {"active": 3, "deferred": 9},
+                    "mcp": {"servers": [{"name": "figma", "tools": 2, "tokens": 30, "state": "connected"}]},
+                    "skills": {"count": 4, "tokens": 120}, "contextFiles": {"count": 1, "tokens": 80}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let wire = event_to_wire(DriverEvent::Report {
+            report: Box::new(report.clone()),
+            invoked: true,
+            notice: Some("Context Usage\n  used: 1%".into()),
+        })
+        .unwrap();
+        assert_eq!(wire.kind, "report");
+        assert_eq!(
+            wire.payload["report"]["context"]["measuredTokens"],
+            Value::Null
+        );
+        assert_eq!(wire.payload["report"]["sessionId"], "s1");
+        let DriverEvent::Report {
+            report: decoded,
+            invoked,
+            notice,
+        } = event_from_wire(wire).unwrap()
+        else {
+            panic!("the event changed variants during its wire round trip");
+        };
+        assert_eq!(*decoded, report);
+        assert!(invoked);
+        assert_eq!(notice.as_deref(), Some("Context Usage\n  used: 1%"));
     }
 
     #[test]

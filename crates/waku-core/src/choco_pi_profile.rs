@@ -16,6 +16,9 @@ pub const PROFILE_SCHEMA: u64 = 1;
 pub const HOST_BRIDGE_SCHEMA: u64 = 1;
 pub const DEFAULT_ENTRY_PREFIX: &str = "choco-pi:host-bridge";
 pub const DEFAULT_STATUS_KEY: &str = "choco-pi.host-bridge";
+/// The `setStatus` key choco-pi publishes structured `/status` and
+/// `/context` reports under, when the marker does not name one.
+pub const DEFAULT_REPORT_STATUS_KEY: &str = "choco-pi.report";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChocoPiProfile {
@@ -27,6 +30,9 @@ pub struct ChocoPiProfile {
     pub pi_launcher: Option<PathBuf>,
     pub pi_version: Option<String>,
     pub host_bridge: Option<HostBridgeSpec>,
+    /// `hostBridge.reportStatusKey`. Reports carry their own schema, so the
+    /// key holds even when the bridge itself is too new for this build.
+    pub report_status_key: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,6 +88,7 @@ struct RawHostBridge {
     schema: Option<u64>,
     entry_prefix: Option<String>,
     status_key: Option<String>,
+    report_status_key: Option<String>,
 }
 
 pub fn profile_path(agent_dir: &Path) -> PathBuf {
@@ -175,6 +182,12 @@ pub fn parse_profile(bytes: &[u8]) -> Option<ChocoPiProfile> {
         .pi
         .map(|pi| (pi.version, pi.launcher.filter(|path| path.is_absolute())))
         .unwrap_or_default();
+    let report_status_key = raw
+        .host_bridge
+        .as_ref()
+        .and_then(|bridge| bridge.report_status_key.clone())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_REPORT_STATUS_KEY.to_owned());
     let host_bridge = raw.host_bridge.map(|bridge| {
         let defaults = HostBridgeSpec::default();
         HostBridgeSpec {
@@ -197,5 +210,6 @@ pub fn parse_profile(bytes: &[u8]) -> Option<ChocoPiProfile> {
         pi_launcher,
         pi_version,
         host_bridge,
+        report_status_key,
     })
 }

@@ -6,7 +6,7 @@
 //! OpenCode Go's usage endpoint, and Codex's own rate-limit
 //! notifications. Frames read only snapshots stored on the entity.
 
-use gpui::{PathBuilder, relative};
+use gpui::{PathBuilder, hsla, relative};
 
 use super::*;
 use crate::usage::{PlanUsage, format_tokens, reset_label};
@@ -180,7 +180,13 @@ impl Waku {
         }
         let session = self.selected_session()?;
         let provider = session.provider;
-        let context = session.context_usage;
+        // A context report (choco-pi) adds its breakdown, and its estimate
+        // stands in until the provider has measured a model call.
+        let report = session
+            .latest_context_report
+            .as_ref()
+            .and_then(|report| report.context.clone());
+        let (context, estimated) = meter_usage(session.context_usage, report.as_ref());
         let theme = Theme::current(cx);
         let plan = self.plan_usage.get(&provider).cloned();
         let error = self.plan_usage_error.get(&provider).cloned();
@@ -244,7 +250,7 @@ impl Waku {
             (Some(error), _) => SharedString::from(tr!("usage.refresh_failed", error = error)),
             (None, Some(percent)) => SharedString::from(tr!(
                 "usage.context_used",
-                percent = format!("{percent:.0}"),
+                percent = format!("{}{percent:.0}", estimate_mark(estimated)),
                 shortcut = crate::platform::primary_shortcut("⌘U", "Ctrl+U")
             )),
             (None, None) => SharedString::from(tr!(
@@ -275,7 +281,11 @@ impl Waku {
                 usage_panel(
                     handle,
                     provider,
-                    context,
+                    MeterContext {
+                        usage: context,
+                        estimated,
+                        report: report.as_ref(),
+                    },
                     plan.clone(),
                     error.as_deref(),
                     plan_loading,
@@ -284,6 +294,195 @@ impl Waku {
             },
         ))
     }
+}
+
+/// The meter's occupancy and whether it is the provider's estimate. A
+/// fresh choco-pi session has measured nothing yet, so its context report's
+/// estimate stands in for what would otherwise read 0%. Streamed usage wins
+/// once a model call has measured anything.
+fn meter_usage(
+    context: Option<ContextUsage>,
+    report: Option<&ContextReport>,
+) -> (Option<ContextUsage>, bool) {
+    let Some(report) = report else {
+        return (context, false);
+    };
+    let window = context
+        .and_then(|usage| usage.window)
+        .or(Some(report.context_window))
+        .filter(|window| *window > 0);
+    match context {
+        Some(usage) if usage.tokens > 0 => (Some(ContextUsage { window, ..usage }), false),
+        _ => {
+            let (tokens, estimated) = report.occupied_tokens();
+            (Some(ContextUsage { tokens, window }), estimated)
+        }
+    }
+}
+
+/// "≈" before a number the provider estimated rather than measured.
+pub(super) fn estimate_mark(estimated: bool) -> &'static str {
+    if estimated { "≈" } else { "" }
+}
+
+/// What a stacked context bar segment stands for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BreakdownPart {
+    Category(usize),
+    Free,
+    Reserve,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct BreakdownSegment {
+    pub(super) part: BreakdownPart,
+    pub(super) tokens: u64,
+    /// Width as a fraction of the whole bar.
+    pub(super) fraction: f32,
+}
+
+/// The report's categories in order, then free space, then the autocompact
+/// reserve. A window the categories overrun widens the bar instead of
+/// letting segments spill past it.
+pub(super) fn breakdown_segments(report: &ContextReport) -> Vec<BreakdownSegment> {
+    let used: u64 = report
+        .categories
+        .iter()
+        .map(|category| category.tokens)
+        .sum();
+    let reserve = report.autocompact_reserve;
+    let free = report
+        .context_window
+        .saturating_sub(used.saturating_add(reserve));
+    let total = report
+        .context_window
+        .max(used.saturating_add(reserve))
+        .max(1);
+    report
+        .categories
+        .iter()
+        .enumerate()
+        .map(|(index, category)| (BreakdownPart::Category(index), category.tokens))
+        .chain([
+            (BreakdownPart::Free, free),
+            (BreakdownPart::Reserve, reserve),
+        ])
+        .filter(|(_, tokens)| *tokens > 0)
+        .map(|(part, tokens)| BreakdownSegment {
+            part,
+            tokens,
+            fraction: (tokens as f64 / total as f64) as f32,
+        })
+        .collect()
+}
+
+/// A category's swatch color. Rows always name their category, so the hue
+/// only links a row to its bar segment.
+fn breakdown_color(theme: &Theme, part: BreakdownPart) -> Hsla {
+    const HUES: [f32; 8] = [0.58, 0.75, 0.08, 0.42, 0.92, 0.15, 0.50, 0.30];
+    match part {
+        BreakdownPart::Category(index) => hsla(
+            HUES[index % HUES.len()],
+            0.55,
+            if theme.is_dark { 0.64 } else { 0.48 },
+            1.0,
+        ),
+        BreakdownPart::Free => theme.overlay_strong,
+        BreakdownPart::Reserve => theme.text_ghost,
+    }
+}
+
+/// The stacked context bar plus one labeled row per segment. Shared by the
+/// usage panel and the `/context` transcript card; builds only from the
+/// report already in memory.
+pub(super) fn context_breakdown(theme: &Theme, report: &ContextReport) -> Div {
+    const BAR_HEIGHT: f32 = 6.0;
+    let segments = breakdown_segments(report);
+    let last = segments.len().saturating_sub(1);
+    let bar = segments.iter().enumerate().fold(
+        div()
+            .h(px(BAR_HEIGHT))
+            .w_full()
+            .flex_none()
+            .flex()
+            .rounded(px(BAR_HEIGHT / 2.0))
+            .bg(theme.overlay_strong)
+            .overflow_hidden(),
+        |bar, (index, segment)| {
+            // Clipping is rectangular, so the end segments round themselves.
+            let radius = px(BAR_HEIGHT / 2.0);
+            bar.child(
+                div()
+                    .h_full()
+                    .flex_none()
+                    .w(relative(segment.fraction))
+                    .bg(breakdown_color(theme, segment.part))
+                    .when(index == 0, |part| {
+                        part.rounded_tl(radius).rounded_bl(radius)
+                    })
+                    .when(index == last, |part| {
+                        part.rounded_tr(radius).rounded_br(radius)
+                    }),
+            )
+        },
+    );
+    let window = report.context_window.max(1);
+    let rows = segments.iter().map(|segment| {
+        let (label, estimated) = match segment.part {
+            BreakdownPart::Category(index) => {
+                let category = &report.categories[index];
+                (
+                    SharedString::from(category.label.clone()),
+                    category.estimated,
+                )
+            }
+            BreakdownPart::Free => (SharedString::from(tr!("usage.context_free")), false),
+            BreakdownPart::Reserve => (SharedString::from(tr!("usage.context_reserve")), false),
+        };
+        let percent = segment.tokens as f64 * 100.0 / window as f64;
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .size(px(8.0))
+                    .flex_none()
+                    .rounded(px(2.0))
+                    .bg(breakdown_color(theme, segment.part)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_color(theme.text_secondary)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(theme.text_tertiary)
+                    .child(SharedString::from(format!(
+                        "{mark}{} · {mark}{percent:.1}%",
+                        format_tokens(segment.tokens),
+                        mark = estimate_mark(estimated),
+                    ))),
+            )
+    });
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(bar)
+        .children(rows)
+}
+
+/// The context-window figures the usage panel renders.
+struct MeterContext<'a> {
+    usage: Option<ContextUsage>,
+    estimated: bool,
+    report: Option<&'a ContextReport>,
 }
 
 /// Fraction of the window in use, capped at 100%. A provider (notably
@@ -374,7 +573,7 @@ fn context_gauge(percent: Option<f64>, track: Hsla, fill: Hsla) -> impl IntoElem
 fn usage_panel(
     handle: &ContextMenuHandle,
     provider: ProviderKind,
-    context: Option<ContextUsage>,
+    context: MeterContext<'_>,
     plan: Option<PlanUsage>,
     error: Option<&str>,
     plan_loading: bool,
@@ -399,16 +598,17 @@ fn usage_panel(
 
     // The context row always renders; a session with nothing measured yet
     // reads "0" over an empty track, exactly like the CLI's own panel.
-    let usage = context.unwrap_or_default();
+    let usage = context.usage.unwrap_or_default();
     let percent = context_percent(usage);
+    let mark = estimate_mark(context.estimated);
     let value = match (usage.window, percent) {
         (Some(window), Some(percent)) => format!(
-            "{} / {} ({percent:.0}%)",
+            "{mark}{} / {} ({mark}{percent:.0}%)",
             format_tokens(usage.tokens.min(window)),
             format_tokens(window)
         ),
         // The transport reports occupancy but not the window size.
-        _ => format_tokens(usage.tokens),
+        _ => format!("{mark}{}", format_tokens(usage.tokens)),
     };
     panel = panel.child(
         div()
@@ -435,6 +635,17 @@ fn usage_panel(
             )
             .child(meter_bar(&theme, percent.unwrap_or(0.0))),
     );
+    if let Some(report) = context.report {
+        panel = panel.child(context_breakdown(&theme, report));
+        if context.estimated || report.categories.iter().any(|category| category.estimated) {
+            panel = panel.child(
+                div()
+                    .text_size(sp(11.5))
+                    .text_color(theme.text_tertiary)
+                    .child(tr!("usage.context_estimate_hint")),
+            );
+        }
+    }
     if plan.is_some() || error.is_some() || plan_loading {
         panel = panel.child(div().h(px(1.0)).flex_none().bg(theme.border));
     }
@@ -624,6 +835,101 @@ mod tests {
             window: Some(1_000_000),
         };
         assert_eq!(context_percent(usage), Some(100.0));
+    }
+
+    fn context_report(measured: Option<u64>) -> ContextReport {
+        let measured = measured.map_or("null".to_owned(), |tokens| tokens.to_string());
+        serde_json::from_str(&format!(
+            r#"{{"contextWindow":200000,"measuredTokens":{measured},"estimatedTokens":30000,
+                "autocompactReserve":20000,"categories":[
+                    {{"label":"System","tokens":10000,"estimated":true}},
+                    {{"label":"Messages","tokens":0,"estimated":false}},
+                    {{"label":"Tools","tokens":20000,"estimated":true}}]}}"#
+        ))
+        .unwrap()
+    }
+
+    /// A fresh choco-pi session has measured nothing: the meter shows the
+    /// report's estimate instead of 0%.
+    #[test]
+    fn meter_falls_back_to_the_reported_estimate_until_measured() {
+        let report = context_report(None);
+        let (usage, estimated) = meter_usage(None, Some(&report));
+        assert!(estimated);
+        assert_eq!(
+            usage,
+            Some(ContextUsage {
+                tokens: 30_000,
+                window: Some(200_000)
+            })
+        );
+        assert_eq!(context_percent(usage.unwrap()), Some(15.0));
+        // An empty streamed usage is not a measurement either.
+        let empty = Some(ContextUsage {
+            tokens: 0,
+            window: None,
+        });
+        assert_eq!(meter_usage(empty, Some(&report)), (usage, true));
+
+        // A measured report and streamed usage are both exact.
+        let measured = context_report(Some(50_000));
+        assert_eq!(
+            meter_usage(None, Some(&measured)),
+            (
+                Some(ContextUsage {
+                    tokens: 50_000,
+                    window: Some(200_000)
+                }),
+                false
+            )
+        );
+        let streamed = Some(ContextUsage {
+            tokens: 60_000,
+            window: None,
+        });
+        assert_eq!(
+            meter_usage(streamed, Some(&report)),
+            (
+                Some(ContextUsage {
+                    tokens: 60_000,
+                    window: Some(200_000)
+                }),
+                false
+            )
+        );
+        // Without a report nothing changes.
+        assert_eq!(meter_usage(streamed, None), (streamed, false));
+    }
+
+    #[test]
+    fn breakdown_ends_with_free_space_then_the_reserve() {
+        let segments = breakdown_segments(&context_report(None));
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| (segment.part, segment.tokens))
+                .collect::<Vec<_>>(),
+            [
+                (BreakdownPart::Category(0), 10_000),
+                (BreakdownPart::Category(2), 20_000),
+                (BreakdownPart::Free, 150_000),
+                (BreakdownPart::Reserve, 20_000),
+            ]
+        );
+        let total: f32 = segments.iter().map(|segment| segment.fraction).sum();
+        assert!((total - 1.0).abs() < 1e-5, "{total}");
+
+        // Categories past the window widen the bar; nothing is free.
+        let mut full = context_report(None);
+        full.context_window = 25_000;
+        let segments = breakdown_segments(&full);
+        assert!(
+            segments
+                .iter()
+                .all(|segment| segment.part != BreakdownPart::Free)
+        );
+        let total: f32 = segments.iter().map(|segment| segment.fraction).sum();
+        assert!((total - 1.0).abs() < 1e-5, "{total}");
     }
 
     #[test]

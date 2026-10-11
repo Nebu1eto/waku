@@ -1267,7 +1267,7 @@ impl StateStore {
         let mut statement = connection
             .prepare(
                 "SELECT id, turn_id, role, content, display_content, attachments,
-                        created_at, streaming
+                        created_at, streaming, report
                  FROM messages WHERE session_id = ?1 ORDER BY position",
             )
             .map_err(to_io_error)?;
@@ -1282,6 +1282,7 @@ impl StateStore {
                     row.get::<_, String>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
+                    row.get::<_, Option<String>>(8)?,
                 ))
             })
             .map_err(to_io_error)?
@@ -1553,6 +1554,7 @@ fn session_skeleton(row: SessionColumns) -> Option<AgentSession> {
         available_commands: Vec::new(),
         thread_goal: None,
         context_usage: None,
+        latest_context_report: None,
         runtime_event_cursor: None,
         provider_session_id: None,
         messages: Vec::new(),
@@ -1572,10 +1574,12 @@ type MessageColumns = (
     String,
     i64,
     i64,
+    Option<String>,
 );
 
 fn message_from_row(row: MessageColumns) -> Option<Message> {
-    let (id, turn_id, role, content, display_content, attachments, created_at, streaming) = row;
+    let (id, turn_id, role, content, display_content, attachments, created_at, streaming, report) =
+        row;
     Some(Message {
         id: Uuid::parse_str(&id).ok()?,
         turn_id: turn_id.as_deref().and_then(|id| Uuid::parse_str(id).ok()),
@@ -1586,25 +1590,31 @@ fn message_from_row(row: MessageColumns) -> Option<Message> {
             .unwrap_or_default(),
         created_at: created_at as u64,
         streaming: streaming != 0,
+        // A report this build cannot read leaves the plain-text notice.
+        report: report
+            .as_deref()
+            .and_then(|report| serde_json::from_str(report).ok()),
     })
 }
 
-/// Serializes a session for the `data` column, omitting `messages`.
+/// Serializes a session for the `data` column, omitting `messages` and the
+/// live-only `latest_context_report`.
 ///
 /// They are rows in `messages` instead, so there is no copy in `data` that
-/// could go stale.
+/// could go stale; the provider re-sends its context report on connect.
 fn session_data(session: &AgentSession) -> io::Result<String> {
     let mut value = serde_json::to_value(session).map_err(to_io_error)?;
     if let Some(object) = value.as_object_mut() {
         object.remove("messages");
+        object.remove("latest_context_report");
     }
     serde_json::to_string(&value).map_err(to_io_error)
 }
 
 const UPSERT_MESSAGE: &str = "INSERT INTO messages(
          id, session_id, turn_id, position, role, content, display_content,
-         attachments, created_at, streaming
-     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         attachments, created_at, streaming, report
+     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
      ON CONFLICT(id) DO UPDATE SET
          session_id = excluded.session_id,
          turn_id    = excluded.turn_id,
@@ -1614,7 +1624,8 @@ const UPSERT_MESSAGE: &str = "INSERT INTO messages(
          display_content = excluded.display_content,
          attachments = excluded.attachments,
          created_at = excluded.created_at,
-         streaming  = excluded.streaming";
+         streaming  = excluded.streaming,
+         report     = excluded.report";
 
 /// Replaces a session's messages with the given list.
 ///
@@ -1651,6 +1662,12 @@ fn write_messages(
         } else {
             serde_json::to_string(&message.attachments).map_err(to_io_error)?
         };
+        let report = message
+            .report
+            .as_deref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(to_io_error)?;
         transaction
             .execute(
                 UPSERT_MESSAGE,
@@ -1670,6 +1687,7 @@ fn write_messages(
                     Value::Text(attachments),
                     Value::Integer(message.created_at as i64),
                     Value::Integer(i64::from(message.streaming)),
+                    report.map_or(Value::Null, Value::Text),
                 ]),
             )
             .map_err(to_io_error)?;
@@ -1749,6 +1767,14 @@ fn message_fingerprint(message: &Message, position: usize) -> u64 {
         } else {
             fold(0);
         }
+    }
+    // A report is immutable once its card is appended; its identity is the
+    // moment the provider took it.
+    if let Some(report) = &message.report {
+        fold(1);
+        fold(fingerprint(&report.at));
+    } else {
+        fold(0);
     }
     hash
 }
@@ -3068,6 +3094,47 @@ mod tests {
             assert_eq!(restored.created_at, expected.created_at);
             assert_eq!(restored.streaming, expected.streaming);
         }
+
+        fs::remove_dir_all(directory).ok();
+    }
+
+    /// A report card survives reload in its message row; the session's
+    /// latest context report is live state and is never written.
+    #[test]
+    fn report_cards_persist_and_the_latest_context_report_does_not() {
+        let directory = temporary_directory();
+        let store = store_in(&directory);
+        let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
+        let report = crate::model::ProviderReport::parse(
+            r#"{"schema":1,"kind":"context","at":"2026-10-11T08:00:00Z","title":"Context Usage",
+                "sections":[{"title":"Totals","rows":[{"label":"Used","value":"1k"}]}],
+                "context":{"contextWindow":200000,"measuredTokens":null,"estimatedTokens":1000,
+                    "autocompactReserve":16000,"categories":[{"label":"System","tokens":1000,"estimated":true}]}}"#,
+        )
+        .unwrap();
+        state.sessions[0].begin_turn("/context");
+        state.sessions[0].push_message(MessageRole::System, "Context Usage\n  used: 1%");
+        state.sessions[0].messages.last_mut().unwrap().report = Some(Box::new(report.clone()));
+        state.sessions[0].latest_context_report = Some(Box::new(report.clone()));
+        state.sessions[0].finish_active_turn(crate::model::TurnStatus::Completed);
+        store.save(&mut state).unwrap();
+
+        let connection = Connection::open(directory.join("app.db")).unwrap();
+        let data: String = connection
+            .query_row("SELECT data FROM session_details LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(!data.contains("latest_context_report"), "{data}");
+        drop(connection);
+
+        let restored = load_hydrated(&store_in(&directory));
+        let session = &restored.sessions[0];
+        assert!(session.latest_context_report.is_none());
+        let card = session.messages.last().unwrap();
+        assert_eq!(card.role, MessageRole::System);
+        assert_eq!(card.content, "Context Usage\n  used: 1%");
+        assert_eq!(card.report.as_deref(), Some(&report));
 
         fs::remove_dir_all(directory).ok();
     }

@@ -1014,6 +1014,11 @@ pub struct AgentSession {
     /// session's meter starts where the conversation left off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsage>,
+    /// The provider's latest `context` report (choco-pi). Live state only:
+    /// never written to the database, because the provider re-sends it when
+    /// the session connects, after each turn, and on model change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_context_report: Option<Box<ProviderReport>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_event_cursor: Option<RuntimeEventCursor>,
     /// Read-only compatibility field for v1 state files. New saves omit it.
@@ -1072,6 +1077,7 @@ impl AgentSession {
             available_commands: Vec::new(),
             thread_goal: None,
             context_usage: None,
+            latest_context_report: None,
             runtime_event_cursor: None,
             provider_session_id: None,
             messages: Vec::new(),
@@ -1108,6 +1114,7 @@ impl AgentSession {
             available_commands: Vec::new(),
             thread_goal: None,
             context_usage: None,
+            latest_context_report: None,
             runtime_event_cursor: None,
             provider_session_id: None,
             messages: Vec::new(),
@@ -1711,6 +1718,11 @@ pub struct Message {
     pub attachments: Vec<MessageAttachment>,
     pub created_at: u64,
     pub streaming: bool,
+    /// A provider report shown as a card in place of this system message;
+    /// `content` keeps the provider's plain-text rendering as the fallback
+    /// for copying, search, and clients that predate reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<Box<ProviderReport>>,
 }
 
 impl Message {
@@ -1724,6 +1736,7 @@ impl Message {
             attachments: Vec::new(),
             created_at: unix_time(),
             streaming: false,
+            report: None,
         }
     }
 
@@ -1975,6 +1988,18 @@ pub enum DriverEvent {
         level: NoticeLevel,
         message: String,
     },
+    /// A structured provider report (choco-pi's `/status` and `/context`).
+    /// Every report refreshes the session's state — a `context` report
+    /// becomes [`AgentSession::latest_context_report`]. `invoked` marks a
+    /// report the user asked for: the driver paired it with the command's
+    /// plain-text notice, which it suppressed, so the client shows the
+    /// report as a transcript card in that notice's place. `notice` is that
+    /// suppressed text, kept as the card's plain-text fallback.
+    Report {
+        report: Box<ProviderReport>,
+        invoked: bool,
+        notice: Option<String>,
+    },
     Error(String),
     ProcessExited,
 }
@@ -1986,6 +2011,205 @@ pub enum DriverEvent {
 pub enum NoticeLevel {
     Info,
     Warning,
+}
+
+/// The [`ProviderReport`] schema this build understands.
+pub const PROVIDER_REPORT_SCHEMA: u32 = 1;
+const PROVIDER_REPORT_MAX_SECTIONS: usize = 64;
+const PROVIDER_REPORT_MAX_ROWS: usize = 512;
+const PROVIDER_REPORT_MAX_CATEGORIES: usize = 64;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderReportKind {
+    Status,
+    Context,
+}
+
+/// A structured `/status` or `/context` report published by choco-pi over
+/// Pi RPC `setStatus`. Unknown fields are ignored so newer publishers stay
+/// readable; anything this build would misread fails
+/// [`ProviderReport::parse`] instead of being guessed.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderReport {
+    pub schema: u32,
+    pub kind: ProviderReportKind,
+    /// ISO-8601 time the provider took the report.
+    pub at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub title: String,
+    pub sections: Vec<ProviderReportSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextReport>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderReportSection {
+    pub title: String,
+    pub rows: Vec<ProviderReportRow>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderReportRow {
+    pub label: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+/// The token breakdown of a `context` report.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(deserialize_with = "report_tokens")]
+    pub context_window: u64,
+    /// Occupancy the provider measured from its last model call; `None`
+    /// before the first call, when only the estimate exists.
+    #[serde(deserialize_with = "report_optional_tokens")]
+    pub measured_tokens: Option<u64>,
+    #[serde(deserialize_with = "report_tokens")]
+    pub estimated_tokens: u64,
+    #[serde(deserialize_with = "report_tokens")]
+    pub autocompact_reserve: u64,
+    pub categories: Vec<ContextReportCategory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ContextReportTools>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<ContextReportMcp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<ContextReportCount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_files: Option<ContextReportCount>,
+}
+
+impl ContextReport {
+    /// The occupancy to show: measured when known, else the estimate.
+    pub fn occupied_tokens(&self) -> (u64, bool) {
+        match self.measured_tokens {
+            Some(tokens) => (tokens, false),
+            None => (self.estimated_tokens, true),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextReportCategory {
+    pub label: String,
+    #[serde(deserialize_with = "report_tokens")]
+    pub tokens: u64,
+    #[serde(default)]
+    pub estimated: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextReportTools {
+    #[serde(deserialize_with = "report_tokens")]
+    pub active: u64,
+    #[serde(deserialize_with = "report_tokens")]
+    pub deferred: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextReportMcp {
+    pub servers: Vec<ContextReportMcpServer>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextReportMcpServer {
+    pub name: String,
+    #[serde(deserialize_with = "report_tokens")]
+    pub tools: u64,
+    #[serde(deserialize_with = "report_tokens")]
+    pub tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextReportCount {
+    #[serde(deserialize_with = "report_tokens")]
+    pub count: u64,
+    #[serde(deserialize_with = "report_tokens")]
+    pub tokens: u64,
+}
+
+/// A count from a JavaScript publisher: an estimate may arrive fractional,
+/// so any finite non-negative number rounds; anything else is rejected.
+fn report_tokens<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = f64::deserialize(deserializer)?;
+    // 2^53: the largest integer a JavaScript number carries exactly.
+    if value.is_finite() && (0.0..=9_007_199_254_740_992.0).contains(&value) {
+        Ok(value.round() as u64)
+    } else {
+        Err(D::Error::custom(
+            "a count must be a finite non-negative number",
+        ))
+    }
+}
+
+fn report_optional_tokens<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct Tokens(#[serde(deserialize_with = "report_tokens")] u64);
+    Ok(Option::<Tokens>::deserialize(deserializer)?.map(|tokens| tokens.0))
+}
+
+impl ProviderReport {
+    /// Parses and validates one published report. Errors describe why a
+    /// frame was dropped; they are for debug logs, not the user.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let report: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        report.validate()?;
+        Ok(report)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != PROVIDER_REPORT_SCHEMA {
+            return Err(format!("unsupported report schema {}", self.schema));
+        }
+        if self.title.trim().is_empty() {
+            return Err("the report has no title".to_owned());
+        }
+        if self.sections.len() > PROVIDER_REPORT_MAX_SECTIONS
+            || self
+                .sections
+                .iter()
+                .map(|section| section.rows.len())
+                .sum::<usize>()
+                > PROVIDER_REPORT_MAX_ROWS
+        {
+            return Err("the report has too many sections or rows".to_owned());
+        }
+        match (self.kind, &self.context) {
+            (ProviderReportKind::Status, Some(_)) => {
+                return Err("a status report carries a context breakdown".to_owned());
+            }
+            (ProviderReportKind::Context, Some(context))
+                if context.categories.len() > PROVIDER_REPORT_MAX_CATEGORIES =>
+            {
+                return Err("the context report has too many categories".to_owned());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, TS)]

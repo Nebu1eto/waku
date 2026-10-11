@@ -850,6 +850,14 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             }
             column
         }
+        MessageRole::System if message.report.is_some() => {
+            let report = message.report.as_deref().expect("guarded above");
+            div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(render_report_card(theme, report))
+        }
         MessageRole::System => div().w_full().flex().justify_center().child(
             div()
                 .px(px(10.0))
@@ -889,6 +897,130 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             )
         },
     )
+}
+
+/// A provider report (choco-pi's `/status`, `/context`) as a card: its
+/// sections as label/value tables, and for `context` the occupancy and its
+/// stacked breakdown first. Builds only from the report in the message.
+fn render_report_card(theme: &Theme, report: &ProviderReport) -> Div {
+    let mut card = div()
+        .w_full()
+        .max_w(px(560.0))
+        .px(px(14.0))
+        .py(px(12.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.overlay)
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .text_size(sp(12.5))
+        .line_height(sp(17.0));
+
+    let subtitle = report
+        .context
+        .as_ref()
+        .and_then(|context| context.model.clone());
+    card = card.child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child(SharedString::from(report.title.clone())),
+            )
+            .child(div().flex_1())
+            .children(subtitle.map(|model| {
+                div()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_color(theme.text_tertiary)
+                    .child(SharedString::from(model))
+            })),
+    );
+
+    if report.kind == ProviderReportKind::Context
+        && let Some(context) = report.context.as_ref()
+    {
+        let (tokens, estimated) = context.occupied_tokens();
+        let mark = super::usage_meter::estimate_mark(estimated);
+        let window = context.context_window.max(1);
+        card = card
+            .child(
+                div()
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(format!(
+                        "{mark}{} / {} ({mark}{:.0}%)",
+                        crate::usage::format_tokens(tokens),
+                        crate::usage::format_tokens(context.context_window),
+                        tokens as f64 * 100.0 / window as f64,
+                    ))),
+            )
+            .child(super::usage_meter::context_breakdown(theme, context));
+        if estimated || context.categories.iter().any(|category| category.estimated) {
+            card = card.child(
+                div()
+                    .text_size(sp(11.5))
+                    .text_color(theme.text_tertiary)
+                    .child(tr!("usage.context_estimate_hint")),
+            );
+        }
+    }
+
+    for section in &report.sections {
+        let mut table = div().flex().flex_col().gap(px(3.0));
+        if !section.title.trim().is_empty() {
+            table = table.child(
+                div()
+                    .pb(px(2.0))
+                    .text_size(sp(11.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_tertiary)
+                    .child(SharedString::from(section.title.clone())),
+            );
+        }
+        for row in &section.rows {
+            table = table.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .w(gpui::relative(0.38))
+                            .flex_none()
+                            .min_w(px(0.0))
+                            .text_color(theme.text_secondary)
+                            .child(SharedString::from(row.label.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_color(theme.text)
+                                    .child(SharedString::from(row.value.clone())),
+                            )
+                            .children(row.hint.as_ref().map(|hint| {
+                                div()
+                                    .text_size(sp(11.5))
+                                    .text_color(theme.text_tertiary)
+                                    .child(SharedString::from(hint.clone()))
+                            })),
+                    ),
+            );
+        }
+        card = card.child(table);
+    }
+    card
 }
 
 /// The message row's context menu. Rebuilt on each open, so availability checks

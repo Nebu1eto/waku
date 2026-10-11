@@ -9,6 +9,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { Virtuoso, type ListItem, type VirtuosoHandle } from 'react-virtuoso'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { ReportCard } from '@/components/context-report'
 import { PreviewableImage } from '@/components/image-preview'
 import { FileTypeIcon, WakuIcon, type WakuIconName } from '@/components/waku-icon'
 import { readAttachmentImage } from '@/lib/attachments'
@@ -1077,6 +1078,13 @@ function MessageRow({
     )
   }
   if (message.role === 'system') {
+    if (message.report) {
+      return (
+        <div className="flex justify-center">
+          <ReportCard report={message.report} t={t} />
+        </div>
+      )
+    }
     return (
       <div className="flex justify-center">
         <div

@@ -216,6 +216,84 @@ describe('provider notices', () => {
   })
 })
 
+// Hand-written to choco-pi's published report shape.
+const contextReport = {
+  schema: 1,
+  kind: 'context',
+  at: '2026-10-11T08:00:00.000Z',
+  sessionId: 's1',
+  title: 'Context Usage',
+  sections: [{ title: 'Totals', rows: [{ label: 'Used', value: '\u224812k', hint: 'estimated' }] }],
+  context: {
+    model: 'anthropic/claude-opus',
+    contextWindow: 200_000,
+    measuredTokens: null,
+    estimatedTokens: 12_000,
+    autocompactReserve: 16_000,
+    categories: [{ label: 'System prompt', tokens: 12_000, estimated: true }],
+    tools: { active: 3, deferred: 9 },
+    mcp: { servers: [] },
+    skills: { count: 1, tokens: 10 },
+    contextFiles: { count: 0, tokens: 0 },
+  },
+}
+
+describe('provider reports', () => {
+  test('an automatic context report updates the live breakdown without a card', () => {
+    let session: AgentSession = { ...runningSession(), status: 'idle', turns: [] }
+    session = apply(session, 'report', { report: contextReport, invoked: false, notice: null })
+    expect(session.latest_context_report).toMatchObject({ title: 'Context Usage' })
+    expect(session.latest_context_report?.context?.measuredTokens).toBeNull()
+    expect(session.messages).toHaveLength(1)
+  })
+
+  test('an invoked report is its command turn\'s card reply', () => {
+    let session = runningSession()
+    session = apply(session, 'report', {
+      report: contextReport,
+      invoked: true,
+      notice: 'Context Usage\n  used: 6%',
+    })
+    expect(session.messages.at(-1)).toMatchObject({
+      role: 'system',
+      turn_id: 'turn',
+      content: 'Context Usage\n  used: 6%',
+      report: { kind: 'context', title: 'Context Usage' },
+    })
+    expect(session.latest_context_report?.title).toBe('Context Usage')
+
+    session = apply(session, 'turnFinished', { success: true, summary: null })
+    expect(session.messages.filter((message) => message.role === 'assistant')).toHaveLength(0)
+  })
+
+  test('a status report never replaces the context breakdown', () => {
+    let session = apply(runningSession(), 'report', { report: contextReport, invoked: false })
+    session = apply(session, 'report', {
+      report: { schema: 1, kind: 'status', at: 'now', title: 'Status', sections: [] },
+      invoked: true,
+      notice: null,
+    })
+    expect(session.latest_context_report?.kind).toBe('context')
+    expect(session.messages.at(-1)).toMatchObject({ content: 'Status', report: { kind: 'status' } })
+  })
+
+  test('malformed reports are dropped', () => {
+    const before = runningSession()
+    for (const report of [
+      null,
+      { ...contextReport, schema: 2 },
+      { ...contextReport, kind: 'usage' },
+      { ...contextReport, title: ' ' },
+      { ...contextReport, sections: [{ title: 'x', rows: [{ label: 'a' }] }] },
+      { ...contextReport, context: { ...contextReport.context, contextWindow: '200k' } },
+    ]) {
+      const session = apply(before, 'report', { report, invoked: true, notice: 'x' })
+      expect(session.messages).toHaveLength(1)
+      expect(session.latest_context_report).toBeUndefined()
+    }
+  })
+})
+
 describe('thread goals', () => {
   test('stores goal updates and names a goal-first task from its objective', () => {
     let session: AgentSession = { ...runningSession(), status: 'idle', messages: [], turns: [] }

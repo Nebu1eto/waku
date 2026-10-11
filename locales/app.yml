@@ -2090,6 +2090,12 @@ usage.shortcut:
   en: Usage (%{shortcut})
 usage.context_window:
   en: Context window
+usage.context_free:
+  en: Free space
+usage.context_reserve:
+  en: Autocompact buffer
+usage.context_estimate_hint:
+  en: ≈ marks an estimate
 usage.plan_limits:
   en: Plan usage limits
 usage.plan_limits_named:

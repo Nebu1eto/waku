@@ -23,6 +23,7 @@ import {
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { toast } from 'sonner'
 import { ControlMenu, type ControlMenuItem } from '@/components/control-menu'
+import { ContextBreakdown, EstimateHint, hasEstimate } from '@/components/context-report'
 import { GoalDialog, goalStatusClass, goalUsageReadout } from '@/components/goal-dialog'
 import { DaemonFilePicker } from '@/components/daemon-file-picker'
 import { PreviewableImage } from '@/components/image-preview'
@@ -38,6 +39,7 @@ import {
   useWorkspaceBranches,
 } from '@/hooks/use-daemon-data'
 import { importDaemonPathAttachment, importFiles, readAttachmentImage } from '@/lib/attachments'
+import { estimateMark, formatTokens, meterUsage } from '@/lib/context-report'
 import {
   checkoutWorkspaceBranch,
   daemonKeys,
@@ -1897,7 +1899,11 @@ function UsageMeter({
   const settings = useDaemonSettings()
   const [open, setOpen] = useState(false)
   const usageShortcut = usePrimaryShortcut('⌘U', 'Ctrl+U')
-  const context = session.context_usage
+  // A context report (choco-pi) adds its breakdown, and its estimate stands
+  // in until the provider has measured a model call.
+  const contextReport = session.latest_context_report?.context ?? null
+  const { usage: context, estimated } = meterUsage(session.context_usage, contextReport)
+  const mark = estimateMark(estimated)
   const contextPercent = context?.window
     ? context.tokens * 100 / context.window
     : null
@@ -1920,7 +1926,7 @@ function UsageMeter({
     ? t('usage.refresh_failed', { error })
     : contextPercent == null
       ? t('usage.shortcut', { shortcut: usageShortcut })
-      : t('usage.context_used', { percent: contextPercent.toFixed(0), shortcut: usageShortcut })
+      : t('usage.context_used', { percent: `${mark}${contextPercent.toFixed(0)}`, shortcut: usageShortcut })
 
   return (
     <Popover.Root modal={false} open={open} onOpenChange={setOpen}>
@@ -1953,9 +1959,11 @@ function UsageMeter({
               label={t('usage.context_window')}
               percent={contextPercent ?? 0}
               value={context?.window && contextPercent != null
-                ? `${formatTokens(context.tokens)} / ${formatTokens(context.window)} (${contextPercent.toFixed(0)}%)`
-                : formatTokens(context?.tokens ?? 0)}
+                ? `${mark}${formatTokens(context.tokens)} / ${formatTokens(context.window)} (${mark}${contextPercent.toFixed(0)}%)`
+                : `${mark}${formatTokens(context?.tokens ?? 0)}`}
             />
+            {contextReport && <ContextBreakdown context={contextReport} t={t} />}
+            {contextReport && hasEstimate(contextReport, estimated) && <EstimateHint t={t} />}
             {(plan.data || plan.isFetching || error) && <div className="h-px bg-border" />}
             {plan.data && <PlanUsageLanes locale={locale} plan={plan.data} provider={session.provider} t={t} />}
             {plan.isFetching && supportsPlanUsage && <UsageSkeleton t={t} />}
@@ -2122,11 +2130,6 @@ function resetLabel(resetsAt: number, locale: string, t: Translator) {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(resetsAt * 1_000)) })
-}
-
-function formatTokens(tokens: number) {
-  if (tokens >= 999_500) return `${(tokens / 1_000_000).toFixed(1)}M`
-  return tokens >= 1_000 ? `${(tokens / 1_000).toFixed(1)}k` : `${tokens}`
 }
 
 function errorMessage(error: unknown) {

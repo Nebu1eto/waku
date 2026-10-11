@@ -73,6 +73,8 @@ export const messages = sqliteTable(
     attachments: text("attachments").notNull().default("[]"),
     createdAt: integer("created_at").notNull(),
     streaming: integer("streaming", { mode: "boolean" }).notNull(),
+    /** JSON-serialized ProviderReport a system message renders as a card. */
+    report: text("report"),
   },
   (table) => [index("messages_by_session").on(table.sessionId, table.position)],
 );

@@ -405,7 +405,8 @@ binary cannot tell them apart. Its installer writes a marker,
   "hostBridge": {
     "schema": 1,
     "entryPrefix": "choco-pi:host-bridge",
-    "statusKey": "choco-pi.host-bridge"
+    "statusKey": "choco-pi.host-bridge",
+    "reportStatusKey": "choco-pi.report"
   }
 }
 ```
@@ -533,6 +534,38 @@ row in the turn it answers or between turns — that is the only reply of
 commands such as `/context` or `/daybreak on`. A notice raised outside a turn
 while Waku's own request (handshake, `/host-bridge …`, `/goal …`) is in flight
 answers Waku and is dropped.
+
+**Reports.** `/status` and `/context` also publish a structured report as
+`setStatus(<hostBridge.reportStatusKey>, JSON)` — `"choco-pi.report"` when the
+marker names none. choco-pi sends one right before the command's plain-text
+`notify`, and a `context` report on its own at session start, after each turn,
+and on model change.
+
+```ts
+{ schema: 1, kind: "status" | "context", at: string /* ISO */, sessionId, title,
+  sections: [{ title, rows: [{ label, value, hint? }] }],
+  context?: { model, contextWindow, measuredTokens: number | null, estimatedTokens,
+              autocompactReserve, categories: [{ label, tokens, estimated }],
+              tools: { active, deferred }, mcp: { servers: [{ name, tools, tokens, state? }] },
+              skills: { count, tokens }, contextFiles: { count, tokens } } }
+```
+
+The driver parses each frame into a `Report` event; a frame with another
+schema, an unknown `kind`, no title, a `status` carrying `context`, or counts
+that are not finite non-negative numbers is dropped (a debug build logs why),
+and unknown fields are ignored. A `context` report becomes the session's live
+`latest_context_report`, which is never persisted: the ⌘U panel shows its
+stacked breakdown (categories, then free space, then the autocompact reserve)
+and the meter uses `estimatedTokens`, marked “≈”, until a model call has
+measured anything. The driver pairs a report with a `notify` that starts with
+the report's title and arrives within 2 s in the same run; it drops that
+notice and re-emits the report as invoked, carrying the notice text. Pairing
+lives in the driver so the desktop and web reducers stay deterministic when the
+daemon replays events. An invoked report becomes a system message whose
+`report` renders as a card — sections as label/value tables, `context` with its
+bar — and whose `content` keeps the notice as the plain-text fallback. The
+report is stored as JSON in the `messages.report` column, so the card survives
+reload.
 
 **Tool progress.** choco-pi's `Agent` tool emits a progress update roughly every
 80 ms; Waku keeps only the latest per tool call and forwards at most one every

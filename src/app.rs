@@ -32,11 +32,12 @@ use crate::md;
 use crate::model::{
     ActivityItem, ActivityKind, AgentSession, BackgroundWorkEvent, BackgroundWorkItem,
     BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkStatus, Checkpoint, CheckpointStatus,
-    ContextUsage, DriverEvent, FavoriteModel, Message, MessageAttachment, MessageRole,
-    PendingPermission, Project, ProviderKind, ProviderModel, ProviderProbe, ProviderResumeCursor,
-    ProviderSessionHistory, ProviderSessionSummary, QueuedMessage, ReasoningBlock, RuntimeMode,
-    SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer,
-    UserInputQuestion, compact_path, unix_time, unix_time_millis,
+    ContextReport, ContextUsage, DriverEvent, FavoriteModel, Message, MessageAttachment,
+    MessageRole, PendingPermission, Project, ProviderKind, ProviderModel, ProviderProbe,
+    ProviderReport, ProviderReportKind, ProviderResumeCursor, ProviderSessionHistory,
+    ProviderSessionSummary, QueuedMessage, ReasoningBlock, RuntimeMode, SessionStatus,
+    SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer, UserInputQuestion,
+    compact_path, unix_time, unix_time_millis,
 };
 use unicode_segmentation::UnicodeSegmentation;
 

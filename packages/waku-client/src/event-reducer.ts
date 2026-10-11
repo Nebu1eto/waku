@@ -2,6 +2,8 @@ import type {
   ActivityItem,
   ActivityKind,
   AgentSession,
+  ContextReport,
+  ProviderReport,
   ProviderResumeCursor,
   ReportedCommand,
   SequencedEvent,
@@ -269,6 +271,34 @@ export function reduceRuntimeEvent(
         created_at: clock.nowSeconds(),
         streaming: false,
       })
+      break
+    }
+    case 'report': {
+      // A structured provider report (choco-pi's `/status`, `/context`).
+      // A `context` report is the session's live breakdown; an invoked one
+      // also takes the place of its command's notice as a transcript card,
+      // keeping that notice as the card's plain-text fallback.
+      const value = asRecord(payload)
+      const report = asProviderReport(value?.report)
+      if (!value || !report) break
+      if (value.invoked === true) {
+        const turn = acceptsTurnOutput(session) ? activeTurn(session) : undefined
+        if (turn) {
+          completeReasoning(session)
+          finishStreamingMessages(session)
+        }
+        const notice = typeof value.notice === 'string' ? value.notice.trim() : ''
+        session.messages.push({
+          id: clock.randomUUID(),
+          turn_id: turn?.id ?? null,
+          role: 'system',
+          content: notice || report.title,
+          created_at: clock.nowSeconds(),
+          streaming: false,
+          report,
+        })
+      }
+      if (report.kind === 'context') session.latest_context_report = report
       break
     }
     case 'error': {
@@ -598,6 +628,64 @@ function asThreadGoal(payload: unknown): ThreadGoal | null {
     return null
   }
   return value as unknown as ThreadGoal
+}
+
+/** The daemon forwards only reports the driver validated; this guards the
+ * fields the clients read, so a malformed event is dropped, not rendered. */
+export function asProviderReport(payload: unknown): ProviderReport | null {
+  const value = asRecord(payload)
+  if (
+    !value
+    || value.schema !== 1
+    || (value.kind !== 'status' && value.kind !== 'context')
+    || typeof value.at !== 'string'
+    || typeof value.title !== 'string'
+    || !value.title.trim()
+    || !Array.isArray(value.sections)
+    || !value.sections.every(isReportSection)
+  ) {
+    return null
+  }
+  if (value.context != null && !isContextReport(value.context)) return null
+  return value as unknown as ProviderReport
+}
+
+function isReportSection(value: unknown) {
+  const section = asRecord(value)
+  return Boolean(
+    section
+      && typeof section.title === 'string'
+      && Array.isArray(section.rows)
+      && section.rows.every((row) => {
+        const record = asRecord(row)
+        return Boolean(
+          record
+            && typeof record.label === 'string'
+            && typeof record.value === 'string'
+            && (record.hint == null || typeof record.hint === 'string'),
+        )
+      }),
+  )
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function isContextReport(value: unknown): value is ContextReport {
+  const context = asRecord(value)
+  return Boolean(
+    context
+      && isCount(context.contextWindow)
+      && (context.measuredTokens === null || isCount(context.measuredTokens))
+      && isCount(context.estimatedTokens)
+      && isCount(context.autocompactReserve)
+      && Array.isArray(context.categories)
+      && context.categories.every((category) => {
+        const record = asRecord(category)
+        return Boolean(record && typeof record.label === 'string' && isCount(record.tokens))
+      }),
+  )
 }
 
 /** Mirror of the desktop's prompt-derived title fallback: first seven words,

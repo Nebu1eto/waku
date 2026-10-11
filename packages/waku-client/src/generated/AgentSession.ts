@@ -3,6 +3,7 @@ import type { AgentTurn } from "./AgentTurn";
 import type { ContextUsage } from "./ContextUsage";
 import type { Message } from "./Message";
 import type { ProviderKind } from "./ProviderKind";
+import type { ProviderReport } from "./ProviderReport";
 import type { ProviderResumeCursor } from "./ProviderResumeCursor";
 import type { QueuedMessage } from "./QueuedMessage";
 import type { ReportedCommand } from "./ReportedCommand";
@@ -64,7 +65,13 @@ thread_goal?: ThreadGoal | null,
  * Context-window occupancy from the live stream, kept so a resumed
  * session's meter starts where the conversation left off.
  */
-context_usage?: ContextUsage | null, runtime_event_cursor?: RuntimeEventCursor | null,
+context_usage?: ContextUsage | null,
+/**
+ * The provider's latest `context` report (choco-pi). Live state only:
+ * never written to the database, because the provider re-sends it when
+ * the session connects, after each turn, and on model change.
+ */
+latest_context_report?: ProviderReport | null, runtime_event_cursor?: RuntimeEventCursor | null,
 /**
  * Read-only compatibility field for v1 state files. New saves omit it.
  */

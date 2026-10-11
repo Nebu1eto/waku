@@ -31,11 +31,14 @@ use crate::driver::{
 };
 use crate::model::{
     ActivityKind, BackgroundWorkEvent, BackgroundWorkKey, BackgroundWorkKind, DriverEvent,
-    GoalOperation, NoticeLevel, ProviderResumeCursor, ReportedCommand, RuntimeMode,
+    GoalOperation, NoticeLevel, ProviderReport, ProviderResumeCursor, ReportedCommand, RuntimeMode,
     ThreadGoalStatus, UserInputAnswer, UserInputOption, UserInputQuestion,
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long after a report its command's plain-text notice may follow and
+/// still be replaced by the report's card.
+const REPORT_NOTICE_WINDOW: Duration = Duration::from_secs(2);
 
 /// choco-pi's foreground `Agent` reports progress every ~80 ms; anything
 /// faster than the stream commit cadence is only churn.
@@ -358,11 +361,18 @@ impl PiDriver {
             parse_model_slug(model)?;
         }
         // Read the marker once per session, never per frame.
-        let host_bridge = match flavor {
+        let (host_bridge, report_status_key) = match flavor {
             PiFlavor::ChocoPi => {
-                flavor.host_bridge(crate::choco_pi_profile::read_profile().as_ref())
+                let profile = crate::choco_pi_profile::read_profile();
+                (
+                    flavor.host_bridge(profile.as_ref()),
+                    Some(profile.map_or_else(
+                        || crate::choco_pi_profile::DEFAULT_REPORT_STATUS_KEY.to_owned(),
+                        |profile| profile.report_status_key,
+                    )),
+                )
             }
-            PiFlavor::Pi | PiFlavor::OhMyPi => None,
+            PiFlavor::Pi | PiFlavor::OhMyPi => (None, None),
         };
         let host_bridge_enabled = host_bridge.is_some();
 
@@ -419,8 +429,12 @@ impl PiDriver {
             thread::Builder::new()
                 .name("waku-pi-reader".into())
                 .spawn(move || {
-                    let mut stream_state =
-                        PiStreamState::new(host_bridge, reader_dialogs, bridge_live);
+                    let mut stream_state = PiStreamState::new(
+                        host_bridge,
+                        report_status_key,
+                        reader_dialogs,
+                        bridge_live,
+                    );
                     let mut chunks = ChunkAssembly::default();
                     for line in BufReader::new(stdout).lines() {
                         match line {
@@ -1798,6 +1812,11 @@ struct PiStreamState {
     tool_updates: HashMap<String, ToolUpdateGate>,
     /// Session-scoped: survives the per-run resets below.
     bridge: Option<HostBridgeState>,
+    /// Session-scoped: the `setStatus` key choco-pi publishes reports under.
+    report_status_key: Option<String>,
+    /// The newest report of this run, kept briefly so the plain-text notice
+    /// that follows a user's `/status` or `/context` can be replaced by it.
+    recent_report: Option<(Box<ProviderReport>, Instant)>,
     dialogs: PendingDialogs,
     bridge_live: Arc<AtomicBool>,
 }
@@ -1813,11 +1832,13 @@ struct ToolUpdateGate {
 impl PiStreamState {
     fn new(
         host_bridge: Option<HostBridgeSpec>,
+        report_status_key: Option<String>,
         dialogs: PendingDialogs,
         bridge_live: Arc<AtomicBool>,
     ) -> Self {
         Self {
             bridge: host_bridge.map(HostBridgeState::new),
+            report_status_key,
             dialogs,
             bridge_live,
             ..Self::default()
@@ -1828,10 +1849,46 @@ impl PiStreamState {
     fn reset_run(&mut self) {
         *self = Self {
             bridge: self.bridge.take(),
+            report_status_key: self.report_status_key.take(),
             dialogs: std::mem::take(&mut self.dialogs),
             bridge_live: std::mem::take(&mut self.bridge_live),
             ..Self::default()
         };
+    }
+
+    /// Whether a `setStatus` frame carries a report rather than bridge state.
+    fn is_report_key(&self, key: &str) -> bool {
+        self.report_status_key.as_deref() == Some(key)
+            && self
+                .bridge
+                .as_ref()
+                .is_none_or(|bridge| bridge.status_key() != key)
+    }
+
+    /// The report a just-raised notice renders as text, if the provider sent
+    /// one moments before it: choco-pi publishes `/status` and `/context`
+    /// as a report, then as the notice its TUI shows. The text may open with
+    /// the report's title or with its first section's heading (`/status`
+    /// prints "Session Info" first), so either pairs.
+    fn take_report_for_notice(&mut self, message: &str) -> Option<Box<ProviderReport>> {
+        let matches = self.recent_report.as_ref().is_some_and(|(report, at)| {
+            at.elapsed() <= REPORT_NOTICE_WINDOW
+                && std::iter::once(report.title.as_str())
+                    .chain(
+                        report
+                            .sections
+                            .first()
+                            .map(|section| section.title.as_str()),
+                    )
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())
+                    .any(|title| message.starts_with(title))
+        });
+        if matches {
+            self.recent_report.take().map(|(report, _)| report)
+        } else {
+            None
+        }
     }
 
     fn publish_bridge_events(&self, events: Vec<DriverEvent>, sink: &impl DriverEventSink) {
@@ -2244,6 +2301,27 @@ fn flush_due_tool_updates(
     }
 }
 
+/// Publishes one structured report frame. A frame this build cannot read is
+/// dropped: the provider's plain-text notice still reaches the user.
+fn publish_report(text: &str, events: &impl DriverEventSink, state: &mut PiStreamState) {
+    match ProviderReport::parse(text) {
+        Ok(report) => {
+            let report = Box::new(report);
+            state.recent_report = Some((report.clone(), Instant::now()));
+            let _ = events.send(DriverEvent::Report {
+                report,
+                invoked: false,
+                notice: None,
+            });
+        }
+        Err(error) => {
+            if cfg!(debug_assertions) {
+                eprintln!("waku: dropped an unreadable choco-pi report: {error}");
+            }
+        }
+    }
+}
+
 /// One line for an `Agent` progress record:
 /// `"<toolUses> tool uses · <tokens> · <activity>"`.
 fn agent_progress_detail(details: &Value) -> Option<String> {
@@ -2285,9 +2363,21 @@ fn forward_extension_ui(
     };
     match method {
         "setStatus" => {
-            let Some(bridge) = state.bridge.as_mut().filter(|bridge| {
-                value.get("statusKey").and_then(Value::as_str) == Some(bridge.status_key())
-            }) else {
+            let key = value.get("statusKey").and_then(Value::as_str);
+            if let Some(key) = key
+                && state.is_report_key(key)
+            {
+                // Clearing the status carries no text; there is nothing to show.
+                if let Some(text) = value.get("statusText").and_then(Value::as_str) {
+                    publish_report(text, events, state);
+                }
+                return;
+            }
+            let Some(bridge) = state
+                .bridge
+                .as_mut()
+                .filter(|bridge| key == Some(bridge.status_key()))
+            else {
                 return;
             };
             let Some(text) = value.get("statusText").and_then(Value::as_str) else {
@@ -2325,6 +2415,15 @@ fn forward_extension_ui(
                 if !pending.is_empty() && !pending.values().any(PendingResponse::is_prompt) {
                     return;
                 }
+            }
+            // The report sent just before this notice replaces it with a card.
+            if let Some(report) = state.take_report_for_notice(message) {
+                let _ = events.send(DriverEvent::Report {
+                    report,
+                    invoked: true,
+                    notice: Some(message.to_owned()),
+                });
+                return;
             }
             let _ = events.send(DriverEvent::Notice {
                 level,
@@ -3337,6 +3436,7 @@ mod chocopi_tests {
                 command_rx,
                 state: PiStreamState::new(
                     flavor.host_bridge(Some(&profile)),
+                    (flavor == PiFlavor::ChocoPi).then(|| profile.report_status_key.clone()),
                     dialogs.clone(),
                     Arc::new(AtomicBool::new(false)),
                 ),
@@ -3424,6 +3524,14 @@ mod chocopi_tests {
             DriverEvent::TextDelta(text) => format!("text {text}"),
             DriverEvent::Error(error) => format!("error {error}"),
             DriverEvent::Notice { level, message } => format!("notice {level:?} {message}"),
+            DriverEvent::Report {
+                report,
+                invoked,
+                notice,
+            } => format!(
+                "report {:?} {} invoked={invoked} notice={notice:?}",
+                report.kind, report.title
+            ),
             DriverEvent::UserInputRequested { request_id, .. } => format!("ask {request_id}"),
             DriverEvent::RichActivity(item) => format!("activity {}", item.complete),
             other => format!("{other:?}"),
@@ -4032,6 +4140,236 @@ mod chocopi_tests {
         assert_eq!(
             events.iter().map(describe).collect::<Vec<_>>(),
             ["notice Info Goal paused."]
+        );
+    }
+
+    /// Hand-written to the published shape: the choco-pi side's probe frames
+    /// were not available when these tests were written.
+    fn context_report() -> Value {
+        json!({
+            "schema": 1, "kind": "context", "at": "2026-10-11T08:00:00.000Z",
+            "sessionId": "0199-session", "title": "Context Usage",
+            "sections": [{"title": "Totals", "rows": [
+                {"label": "Used", "value": "\u{2248}12.3k / 200k", "hint": "estimated"}]}],
+            "context": {
+                "model": "anthropic/claude-opus", "contextWindow": 200000,
+                "measuredTokens": null, "estimatedTokens": 12345.4, "autocompactReserve": 16384,
+                "categories": [
+                    {"label": "System prompt", "tokens": 4000, "estimated": true},
+                    {"label": "Tools", "tokens": 8345, "estimated": true}],
+                "tools": {"active": 12, "deferred": 40},
+                "mcp": {"servers": [{"name": "figma", "tools": 20, "tokens": 900, "state": "deferred"}]},
+                "skills": {"count": 9, "tokens": 700},
+                "contextFiles": {"count": 2, "tokens": 1500},
+                "futureField": true
+            }
+        })
+    }
+
+    fn status_report() -> Value {
+        json!({
+            "schema": 1, "kind": "status", "at": "2026-10-11T08:00:00.000Z",
+            "sessionId": "0199-session", "title": "Status",
+            "sections": [{"title": "Session Info", "rows": [{"label": "Model", "value": "opus"}]}]
+        })
+    }
+
+    fn report_frame(key: &str, report: &Value) -> Value {
+        json!({"type": "extension_ui_request", "id": "s1", "method": "setStatus",
+            "statusKey": key, "statusText": report.to_string()})
+    }
+
+    fn notify_frame(message: &str) -> Value {
+        json!({"type": "extension_ui_request", "id": "n1", "method": "notify",
+            "message": message, "notifyType": "info"})
+    }
+
+    #[test]
+    fn chocopi_report_frames_emit_reports_and_unreadable_ones_are_dropped() {
+        let mut harness = Harness::new(PiFlavor::ChocoPi);
+        let events = harness.feed_value(report_frame("choco-pi.report", &context_report()));
+        assert_eq!(
+            events.iter().map(describe).collect::<Vec<_>>(),
+            ["report Context Context Usage invoked=false notice=None"]
+        );
+        let DriverEvent::Report { report, .. } = &events[0] else {
+            unreachable!()
+        };
+        let context = report.context.as_ref().unwrap();
+        assert_eq!(context.measured_tokens, None);
+        assert_eq!(context.estimated_tokens, 12345);
+        assert_eq!(context.occupied_tokens(), (12345, true));
+        assert_eq!(
+            report.sections[0].rows[0].hint.as_deref(),
+            Some("estimated")
+        );
+
+        let mut unreadable = vec![
+            json!({"type": "extension_ui_request", "id": "s2", "method": "setStatus",
+                "statusKey": "choco-pi.report", "statusText": "{not json"}),
+            // Clearing the status.
+            json!({"type": "extension_ui_request", "id": "s3", "method": "setStatus",
+                "statusKey": "choco-pi.report"}),
+        ];
+        for (pointer, replacement) in [
+            ("/schema", json!(2)),
+            ("/kind", json!("usage")),
+            ("/title", json!("  ")),
+            ("/sections", json!(null)),
+            ("/context/contextWindow", json!(-1)),
+            ("/context/measuredTokens", json!("12k")),
+        ] {
+            let mut report = context_report();
+            *report.pointer_mut(pointer).unwrap() = replacement;
+            unreadable.push(report_frame("choco-pi.report", &report));
+        }
+        let mut status_with_context = status_report();
+        status_with_context["context"] = context_report()["context"].clone();
+        unreadable.push(report_frame("choco-pi.report", &status_with_context));
+        for frame in unreadable {
+            let events = harness.feed_value(frame.clone());
+            assert!(events.is_empty(), "{frame}: {events:?}");
+        }
+        // Another key never reads as a report.
+        assert!(
+            harness
+                .feed_value(report_frame("someone.else", &status_report()))
+                .is_empty()
+        );
+        assert!(harness.sent().is_empty());
+    }
+
+    #[test]
+    fn report_key_comes_from_the_marker_with_a_literal_fallback() {
+        let profile = crate::choco_pi_profile::parse_profile(
+            br#"{"schema":1,"checkout":"/choco-pi","hostBridge":{"schema":1,"reportStatusKey":"custom.report"}}"#,
+        )
+        .unwrap();
+        assert_eq!(profile.report_status_key, "custom.report");
+        let profile =
+            crate::choco_pi_profile::parse_profile(br#"{"schema":1,"checkout":"/choco-pi"}"#)
+                .unwrap();
+        assert_eq!(profile.report_status_key, "choco-pi.report");
+
+        let mut harness = Harness::new(PiFlavor::ChocoPi);
+        harness.state.report_status_key = Some("custom.report".into());
+        assert!(
+            harness
+                .feed_value(report_frame("choco-pi.report", &status_report()))
+                .is_empty()
+        );
+        assert_eq!(
+            harness
+                .feed_value(report_frame("custom.report", &status_report()))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn plain_pi_ignores_report_frames() {
+        for flavor in [PiFlavor::Pi, PiFlavor::OhMyPi] {
+            let mut harness = Harness::new(flavor);
+            let events = harness.feed_value(report_frame("choco-pi.report", &status_report()));
+            assert!(events.is_empty(), "{flavor:?}: {events:?}");
+        }
+    }
+
+    /// `/context` publishes its report, then the notice its TUI shows. The
+    /// notice is replaced by the report's card; the text rides along.
+    #[test]
+    fn chocopi_invoked_report_replaces_its_notice() {
+        let mut harness = Harness::new(PiFlavor::ChocoPi);
+        send_prompt(&mut Vec::new(), &harness.pending, &mut 0, "/context").unwrap();
+        let events = harness.feed(
+            &[
+                report_frame("choco-pi.report", &context_report()),
+                notify_frame("Context Usage\n  used: \u{2248}6%"),
+                json!({"id": "waku-1", "type": "response", "command": "prompt",
+                    "success": true, "data": {"disposition": "handled"}}),
+            ]
+            .map(|frame| frame.to_string())
+            .join("\n"),
+        );
+        assert_eq!(
+            events.iter().map(describe).collect::<Vec<_>>(),
+            [
+                "report Context Context Usage invoked=false notice=None",
+                "report Context Context Usage invoked=true notice=Some(\"Context Usage\\n  used: \u{2248}6%\")",
+                "turn started",
+                "turn finished true",
+            ]
+        );
+    }
+
+    #[test]
+    fn chocopi_notices_without_a_fresh_matching_report_stay_text() {
+        let mut harness = Harness::new(PiFlavor::ChocoPi);
+        harness.feed_value(report_frame("choco-pi.report", &status_report()));
+        // Another command's notice is not the report's text, and the report
+        // still waits for its own.
+        assert_eq!(
+            harness
+                .feed_value(notify_frame("Daybreak on."))
+                .iter()
+                .map(describe)
+                .collect::<Vec<_>>(),
+            ["notice Info Daybreak on."]
+        );
+        // choco-pi's `/status` text opens with its first section heading, not
+        // the frame title; that pairs too.
+        assert_eq!(
+            harness
+                .feed_value(notify_frame(
+                    "Session Info
+
+File  In-memory"
+                ))
+                .iter()
+                .map(describe)
+                .collect::<Vec<_>>(),
+            [r#"report Status Status invoked=true notice=Some("Session Info\n\nFile  In-memory")"#]
+        );
+        harness.feed_value(report_frame("choco-pi.report", &status_report()));
+        assert_eq!(
+            harness
+                .feed_value(notify_frame("Status\n  model: opus"))
+                .iter()
+                .map(describe)
+                .collect::<Vec<_>>(),
+            ["report Status Status invoked=true notice=Some(\"Status\\n  model: opus\")"]
+        );
+        // Each report replaces one notice at most.
+        assert_eq!(
+            harness
+                .feed_value(notify_frame("Status\n  model: opus"))
+                .iter()
+                .map(describe)
+                .collect::<Vec<_>>(),
+            ["notice Info Status\n  model: opus"]
+        );
+        // A report older than the window no longer claims the notice.
+        harness.feed_value(report_frame("choco-pi.report", &status_report()));
+        let (_, at) = harness.state.recent_report.as_mut().unwrap();
+        *at = Instant::now()
+            .checked_sub(REPORT_NOTICE_WINDOW + Duration::from_millis(100))
+            .unwrap();
+        assert_eq!(
+            harness
+                .feed_value(notify_frame("Status\n  model: opus"))
+                .iter()
+                .map(describe)
+                .collect::<Vec<_>>(),
+            ["notice Info Status\n  model: opus"]
+        );
+        // A run boundary ends the pairing too.
+        harness.feed_value(report_frame("choco-pi.report", &status_report()));
+        harness.feed_value(json!({"type": "agent_start"}));
+        harness.feed_value(json!({"type": "agent_settled"}));
+        let events = harness.feed_value(notify_frame("Status"));
+        assert_eq!(
+            events.iter().map(describe).collect::<Vec<_>>(),
+            ["notice Info Status"]
         );
     }
 

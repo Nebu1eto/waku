@@ -20,7 +20,7 @@ use crate::computer_use::{ComputerTarget, ComputerUsePhase, ComputerUseState};
 use crate::driver::{self, DriverHandle, DriverStartOptions, SessionOptions};
 use crate::model::{
     ActivityKind, AgentSession, Checkpoint, CheckpointStatus, DriverEvent, NoticeLevel,
-    PermissionOption, Project, ProviderKind, ProviderResumeCursor, SessionStatus,
+    PermissionOption, Project, ProviderKind, ProviderReport, ProviderResumeCursor, SessionStatus,
 };
 use crate::persistence::{ComposerDraftStore, PersistedState, StateStore};
 use crate::settings::DaemonSettingsStore;
@@ -1955,6 +1955,14 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::Notice { level, message } => {
             ("notice", json!({ "level": level, "message": message }))
         }
+        DriverEvent::Report {
+            report,
+            invoked,
+            notice,
+        } => (
+            "report",
+            json!({ "report": report, "invoked": invoked, "notice": notice }),
+        ),
         DriverEvent::Error(error) => ("error", Value::String(error)),
         DriverEvent::ProcessExited => ("processExited", Value::Null),
     };
@@ -2055,6 +2063,14 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 message: notice.message,
             }
         }
+        "report" => {
+            let report: ReportWire = serde_json::from_value(payload)?;
+            DriverEvent::Report {
+                report: report.report,
+                invoked: report.invoked,
+                notice: report.notice,
+            }
+        }
         "error" => DriverEvent::Error(serde_json::from_value(payload)?),
         "processExited" => DriverEvent::ProcessExited,
         kind => bail!("daemon sent an unsupported driver event {kind:?}"),
@@ -2132,6 +2148,15 @@ struct TurnFinishedWire {
 struct NoticeWire {
     level: NoticeLevel,
     message: String,
+}
+
+#[derive(Deserialize)]
+struct ReportWire {
+    report: Box<ProviderReport>,
+    #[serde(default)]
+    invoked: bool,
+    #[serde(default)]
+    notice: Option<String>,
 }
 
 #[cfg(test)]
@@ -2239,6 +2264,33 @@ mod tests {
         let mut missing_message = session;
         missing_message.messages.clear();
         assert!(validate_message_rewind(&missing_message, 1).is_err());
+    }
+
+    #[test]
+    fn wire_event_round_trip_preserves_provider_reports() {
+        let report = ProviderReport::parse(
+            r#"{"schema":1,"kind":"status","at":"2026-10-11T08:00:00Z","sessionId":"s1",
+                "title":"Status","sections":[{"title":"Session","rows":[{"label":"Model","value":"opus"}]}]}"#,
+        )
+        .unwrap();
+        let wire = event_to_wire(DriverEvent::Report {
+            report: Box::new(report.clone()),
+            invoked: false,
+            notice: None,
+        })
+        .unwrap();
+        assert_eq!(wire.kind, "report");
+        let DriverEvent::Report {
+            report: decoded,
+            invoked,
+            notice,
+        } = event_from_wire(wire).unwrap()
+        else {
+            panic!("the event changed variants during its wire round trip");
+        };
+        assert_eq!(*decoded, report);
+        assert!(!invoked);
+        assert_eq!(notice, None);
     }
 
     #[test]
