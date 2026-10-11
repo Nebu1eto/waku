@@ -1,11 +1,15 @@
-import type { ContextReport, ProviderReport } from '@waku/client'
+import type { ContextReport, ProviderReport, UsageReport } from '@waku/client'
 import {
   breakdownSegments,
   estimateMark,
   formatTokens,
+  providerResetPhrase,
+  usedPercent,
   type BreakdownPart,
 } from '@/lib/context-report'
+import { useI18n } from '@/lib/i18n'
 import type { Translator } from '@/lib/transcript-presentation'
+import { cn } from '@/lib/utils'
 
 const CATEGORY_HUES = [209, 270, 29, 151, 331, 54, 180, 108]
 
@@ -75,11 +79,13 @@ export function EstimateHint({ t }: { t: Translator }) {
   return <div className="text-[11px] text-[var(--text-tertiary)]">{t('usage.context_estimate_hint')}</div>
 }
 
-/** A provider report (choco-pi's `/status`, `/context`) as a transcript
- * card: the context occupancy and breakdown first, then each section as a
- * label/value table. */
+/** A provider report (choco-pi's `/status`, `/context`, `/usage`) as a
+ * transcript card: the context occupancy and breakdown first, then each
+ * section as a label/value table. A usage report's typed block replaces its
+ * sections, which repeat the same figures as text. */
 export function ReportCard({ report, t }: { report: ProviderReport; t: Translator }) {
   const context = report.kind === 'context' ? report.context : null
+  const usage = report.kind === 'usage' ? report.usage : null
   const occupied = context
     ? context.measuredTokens ?? context.estimatedTokens
     : 0
@@ -108,7 +114,8 @@ export function ReportCard({ report, t }: { report: ProviderReport; t: Translato
           {hasEstimate(context, estimated) && <EstimateHint t={t} />}
         </>
       )}
-      {report.sections.map((section, index) => (
+      {usage && <UsageBlocks t={t} usage={usage} />}
+      {!usage && report.sections.map((section, index) => (
         <table key={`${section.title}-${index}`} className="w-full table-fixed border-collapse">
           {section.title.trim() && (
             <caption className="pb-0.5 text-left text-[11px] font-medium text-[var(--text-tertiary)]">
@@ -131,5 +138,104 @@ export function ReportCard({ report, t }: { report: ProviderReport; t: Translato
         </table>
       ))}
     </section>
+  )
+}
+
+export function UsageLane({
+  label,
+  percent,
+  reset,
+  value,
+}: {
+  label: string
+  percent: number
+  reset?: string
+  value: string
+}) {
+  return (
+    <div className="space-y-[7px]">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {reset && <span className="shrink-0 text-[11px] text-[var(--text-tertiary)]">{reset}</span>}
+        <span className="shrink-0 text-[11px] text-[var(--text-secondary)]">{value}</span>
+      </div>
+      <div className="h-[3px] overflow-hidden rounded-full bg-accent">
+        <div
+          className={cn(
+            'h-full rounded-full bg-[var(--text-secondary)]',
+            percent >= 80 && 'bg-[var(--warning)]',
+            percent >= 95 && 'bg-destructive',
+          )}
+          style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+export function resetLabel(resetsAt: number, locale: string, t: Translator) {
+  const seconds = resetsAt - Math.floor(Date.now() / 1_000)
+  if (seconds <= 0) return t('usage.resets_soon')
+  const minutes = Math.ceil(seconds / 60)
+  if (minutes < 60) return t('usage.resets_in_minutes', { count: minutes })
+  if (minutes < 24 * 60) {
+    const hours = Math.floor(minutes / 60)
+    const remainder = minutes % 60
+    return remainder
+      ? t('usage.resets_in_hours_minutes', { hours, minutes: remainder })
+      : t('usage.resets_in_hours', { count: hours })
+  }
+  return t('usage.resets_date', { date: new Intl.DateTimeFormat(locale, {
+    weekday: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(resetsAt * 1_000)) })
+}
+
+/** A `usage` report's providers: a heading with plan, status, and cache
+ * note, then one quota lane per window, always read as percent used. */
+function UsageBlocks({ usage, t }: { usage: UsageReport; t: Translator }) {
+  const { locale } = useI18n()
+  const now = Math.floor(Date.now() / 1_000)
+  return (
+    <div className="flex flex-col gap-3">
+      {usage.providers.map((provider, index) => {
+        const summary = [provider.plan, provider.status]
+          .map((part) => part?.trim())
+          .filter(Boolean)
+          .join(' \u00b7 ')
+        const reason = provider.cached?.reason?.trim()
+        return (
+          <div key={`${provider.name}-${index}`} className="flex flex-col gap-[7px]">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="shrink-0 font-medium">{provider.name}</span>
+              <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">{summary}</span>
+            </div>
+            {provider.cached && (
+              <div className="text-[11px] text-[var(--text-tertiary)]">
+                {reason ? `${t('usage.cached_snapshot')} \u00b7 ${reason}` : t('usage.cached_snapshot')}
+              </div>
+            )}
+            {provider.windows.map((window, windowIndex) => {
+              const used = usedPercent(window)
+              const resetsAt = window.resetsAt == null ? null : Math.floor(window.resetsAt / 1_000)
+              const reset = resetsAt == null
+                ? undefined
+                : providerResetPhrase(window.resetLabel, resetsAt, now) ?? resetLabel(resetsAt, locale, t)
+              const detail = [window.pace?.label, window.detail]
+                .map((part) => part?.trim())
+                .filter(Boolean)
+                .join(' \u00b7 ')
+              return (
+                <div key={`${window.label}-${windowIndex}`} className="flex flex-col gap-1">
+                  <UsageLane label={window.label} percent={used} reset={reset} value={`${used.toFixed(0)}%`} />
+                  {detail && <div className="text-[11px] text-[var(--text-tertiary)]">{detail}</div>}
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
   )
 }

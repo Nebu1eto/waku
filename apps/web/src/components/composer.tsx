@@ -23,7 +23,13 @@ import {
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { toast } from 'sonner'
 import { ControlMenu, type ControlMenuItem } from '@/components/control-menu'
-import { ContextBreakdown, EstimateHint, hasEstimate } from '@/components/context-report'
+import {
+  ContextBreakdown,
+  EstimateHint,
+  hasEstimate,
+  resetLabel,
+  UsageLane,
+} from '@/components/context-report'
 import { GoalDialog, goalStatusClass, goalUsageReadout } from '@/components/goal-dialog'
 import { DaemonFilePicker } from '@/components/daemon-file-picker'
 import { PreviewableImage } from '@/components/image-preview'
@@ -2064,38 +2070,6 @@ function PlanUsageLanes({
   )
 }
 
-function UsageLane({
-  label,
-  percent,
-  reset,
-  value,
-}: {
-  label: string
-  percent: number
-  reset?: string
-  value: string
-}) {
-  return (
-    <div className="space-y-[7px]">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        {reset && <span className="shrink-0 text-[11px] text-[var(--text-tertiary)]">{reset}</span>}
-        <span className="shrink-0 text-[11px] text-[var(--text-secondary)]">{value}</span>
-      </div>
-      <div className="h-[3px] overflow-hidden rounded-full bg-accent">
-        <div
-          className={cn(
-            'h-full rounded-full bg-[var(--text-secondary)]',
-            percent >= 80 && 'bg-[var(--warning)]',
-            percent >= 95 && 'bg-destructive',
-          )}
-          style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
 function UsageSkeleton({ t }: { t: Translator }) {
   return (
     <div aria-label={t('usage.plan_limits')} className="space-y-3" role="status">
@@ -2111,25 +2085,6 @@ function UsageSkeleton({ t }: { t: Translator }) {
       ))}
     </div>
   )
-}
-
-function resetLabel(resetsAt: number, locale: string, t: Translator) {
-  const seconds = resetsAt - Math.floor(Date.now() / 1_000)
-  if (seconds <= 0) return t('usage.resets_soon')
-  const minutes = Math.ceil(seconds / 60)
-  if (minutes < 60) return t('usage.resets_in_minutes', { count: minutes })
-  if (minutes < 24 * 60) {
-    const hours = Math.floor(minutes / 60)
-    const remainder = minutes % 60
-    return remainder
-      ? t('usage.resets_in_hours_minutes', { hours, minutes: remainder })
-      : t('usage.resets_in_hours', { count: hours })
-  }
-  return t('usage.resets_date', { date: new Intl.DateTimeFormat(locale, {
-    weekday: 'short',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(resetsAt * 1_000)) })
 }
 
 function errorMessage(error: unknown) {

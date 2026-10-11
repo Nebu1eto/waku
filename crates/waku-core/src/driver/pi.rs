@@ -1815,7 +1815,8 @@ struct PiStreamState {
     /// Session-scoped: the `setStatus` key choco-pi publishes reports under.
     report_status_key: Option<String>,
     /// The newest report of this run, kept briefly so the plain-text notice
-    /// that follows a user's `/status` or `/context` can be replaced by it.
+    /// that follows a user's `/status`, `/context`, or `/usage` can be
+    /// replaced by it.
     recent_report: Option<(Box<ProviderReport>, Instant)>,
     dialogs: PendingDialogs,
     bridge_live: Arc<AtomicBool>,
@@ -1866,10 +1867,11 @@ impl PiStreamState {
     }
 
     /// The report a just-raised notice renders as text, if the provider sent
-    /// one moments before it: choco-pi publishes `/status` and `/context`
-    /// as a report, then as the notice its TUI shows. The text may open with
-    /// the report's title or with its first section's heading (`/status`
-    /// prints "Session Info" first), so either pairs.
+    /// one moments before it: choco-pi publishes `/status`, `/context`, and
+    /// `/usage` as a report, then as the notice its TUI shows. The text may
+    /// open with the report's title or with its first section's heading
+    /// (`/status` prints "Session Info" first, `/usage` the first provider's
+    /// name), so either pairs.
     fn take_report_for_notice(&mut self, message: &str) -> Option<Box<ProviderReport>> {
         let matches = self.recent_report.as_ref().is_some_and(|(report, at)| {
             at.elapsed() <= REPORT_NOTICE_WINDOW
@@ -2306,6 +2308,15 @@ fn flush_due_tool_updates(
 fn publish_report(text: &str, events: &impl DriverEventSink, state: &mut PiStreamState) {
     match ProviderReport::parse(text) {
         Ok(report) => {
+            // A usage report also feeds the account plan meters, the same
+            // lanes Claude and Codex fill. One with no window at all (every
+            // provider failed) keeps the previous snapshot instead of
+            // blanking it.
+            let plan = report
+                .usage
+                .as_ref()
+                .map(|usage| usage.plan_usage())
+                .filter(|plan| !plan.windows.is_empty());
             let report = Box::new(report);
             state.recent_report = Some((report.clone(), Instant::now()));
             let _ = events.send(DriverEvent::Report {
@@ -2313,6 +2324,9 @@ fn publish_report(text: &str, events: &impl DriverEventSink, state: &mut PiStrea
                 invoked: false,
                 notice: None,
             });
+            if let Some(plan) = plan {
+                let _ = events.send(DriverEvent::PlanUsageUpdated(plan));
+            }
         }
         Err(error) => {
             if cfg!(debug_assertions) {
@@ -4370,6 +4384,85 @@ File  In-memory"
         assert_eq!(
             events.iter().map(describe).collect::<Vec<_>>(),
             ["notice Info Status"]
+        );
+    }
+
+    /// Hand-written to choco-pi's `usageReportFrame` shape (one section per
+    /// provider, titled with its name); no probe capture of a usage frame
+    /// existed when this test was written.
+    fn usage_report() -> Value {
+        json!({
+            "schema": 1, "kind": "usage", "at": "2026-10-11T08:00:00.000Z",
+            "sessionId": "0199-session", "title": "Usage",
+            "sections": [
+                {"title": "Claude", "rows": [{"label": "Plan", "value": "Max"}]},
+                {"title": "ChatGPT", "rows": [{"label": "Plan", "value": "Plus"}]}],
+            "usage": {"observedAt": "2026-10-11T08:00:00.000Z", "providers": [
+                {"name": "Claude", "plan": "Max", "windows": [
+                    {"label": "5h session", "percent": 42, "qualifier": "used",
+                     "resetsAt": "2026-10-11T10:00:00.000Z", "resetLabel": "resets"}]},
+                {"name": "ChatGPT", "plan": "Plus", "windows": [
+                    {"label": "Weekly", "percent": 75, "qualifier": "remaining",
+                     "resetsAt": "2026-10-11T08:00:01.999Z"}]}]}
+        })
+    }
+
+    /// `/usage` publishes its report, then `formatUsageReport`'s text, whose
+    /// first line is the first provider's heading. Every usage report also
+    /// refreshes the plan meters, with remaining windows read as used.
+    #[test]
+    fn chocopi_usage_reports_feed_the_card_and_the_plan_meters() {
+        let mut harness = Harness::new(PiFlavor::ChocoPi);
+        let events = harness.feed_value(report_frame("choco-pi.report", &usage_report()));
+        assert_eq!(
+            events.iter().map(describe).collect::<Vec<_>>()[0],
+            "report Usage Usage invoked=false notice=None"
+        );
+        let [_, DriverEvent::PlanUsageUpdated(plan)] = events.as_slice() else {
+            panic!("expected a report then plan usage: {events:?}");
+        };
+        assert_eq!(plan.plan_label.as_deref(), Some("Claude Max, ChatGPT Plus"));
+        assert_eq!(
+            plan.windows,
+            [
+                crate::usage::PlanWindow {
+                    label: "Claude 5h session".into(),
+                    percent: 42.0,
+                    resets_at: Some(1_791_712_800),
+                },
+                crate::usage::PlanWindow {
+                    label: "ChatGPT Weekly".into(),
+                    percent: 25.0,
+                    resets_at: Some(1_791_705_601),
+                },
+            ]
+        );
+        let notice = "Claude \u{2014} Max\n  5h session\n  \u{2588}\u{2588}\u{2591}\u{2591} 42% used\n\nChatGPT \u{2014} Plus";
+        assert_eq!(
+            harness
+                .feed_value(notify_frame(notice))
+                .iter()
+                .map(describe)
+                .collect::<Vec<_>>(),
+            [format!(
+                "report Usage Usage invoked=true notice={:?}",
+                Some(notice)
+            )]
+        );
+
+        // Every provider failed: the card still shows, the meters keep
+        // their last snapshot.
+        let mut failed = usage_report();
+        for provider in failed["usage"]["providers"].as_array_mut().unwrap() {
+            provider["windows"] = json!([]);
+        }
+        assert_eq!(
+            harness
+                .feed_value(report_frame("choco-pi.report", &failed))
+                .iter()
+                .map(describe)
+                .collect::<Vec<_>>(),
+            ["report Usage Usage invoked=false notice=None"]
         );
     }
 

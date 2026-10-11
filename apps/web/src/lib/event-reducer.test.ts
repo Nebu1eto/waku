@@ -238,6 +238,33 @@ const contextReport = {
   },
 }
 
+// As the daemon forwards it: the driver already parsed the ISO times to
+// Unix milliseconds.
+const usageReport = {
+  schema: 1,
+  kind: 'usage',
+  at: '2026-10-11T08:00:00.000Z',
+  sessionId: 's1',
+  title: 'Usage',
+  sections: [{ title: 'Claude', rows: [{ label: 'Plan', value: 'Max' }] }],
+  usage: {
+    observedAt: 1_791_705_600_000,
+    providers: [{
+      name: 'Claude',
+      plan: 'Max',
+      cached: { at: 1_791_705_300_000, reason: 'throttled' },
+      windows: [{
+        label: '5h session',
+        percent: 70,
+        qualifier: 'remaining',
+        resetsAt: 1_791_712_800_000,
+        resetLabel: 'resets',
+        pace: { health: 'over', label: 'ahead of pace' },
+      }],
+    }],
+  },
+}
+
 describe('provider reports', () => {
   test('an automatic context report updates the live breakdown without a card', () => {
     let session: AgentSession = { ...runningSession(), status: 'idle', turns: [] }
@@ -275,6 +302,39 @@ describe('provider reports', () => {
     })
     expect(session.latest_context_report?.kind).toBe('context')
     expect(session.messages.at(-1)).toMatchObject({ content: 'Status', report: { kind: 'status' } })
+  })
+
+  test('an invoked usage report is a card and never the context breakdown', () => {
+    let session = apply(runningSession(), 'report', { report: contextReport, invoked: false })
+    session = apply(session, 'report', { report: usageReport, invoked: true, notice: 'Claude \u2014 Max' })
+    expect(session.messages.at(-1)).toMatchObject({
+      role: 'system',
+      turn_id: 'turn',
+      content: 'Claude \u2014 Max',
+      report: { kind: 'usage', usage: { providers: [{ name: 'Claude', windows: [{ qualifier: 'remaining' }] }] } },
+    })
+    expect(session.latest_context_report?.kind).toBe('context')
+    // Without the typed block the sections still make a card.
+    const { usage: _usage, ...sectionsOnly } = usageReport
+    session = apply(session, 'report', { report: sectionsOnly, invoked: true, notice: null })
+    expect(session.messages.at(-1)).toMatchObject({ content: 'Usage', report: { kind: 'usage' } })
+  })
+
+  test('malformed usage reports are dropped', () => {
+    const before = runningSession()
+    const window = usageReport.usage.providers[0]!.windows[0]!
+    for (const usage of [
+      { providers: 'Claude' },
+      { providers: [{ name: 'Claude', windows: [{ ...window, percent: '42%' }] }] },
+      { providers: [{ name: 'Claude', windows: [{ ...window, qualifier: 'left' }] }] },
+      { providers: [{ name: 'Claude', windows: [{ ...window, resetsAt: '2026-10-11' }] }] },
+      { providers: [{ name: 7, windows: [] }] },
+    ]) {
+      const session = apply(before, 'report', { report: { ...usageReport, usage }, invoked: true, notice: 'x' })
+      expect(session.messages).toHaveLength(1)
+    }
+    const withContext = { ...usageReport, context: contextReport.context }
+    expect(apply(before, 'report', { report: withContext, invoked: true }).messages).toHaveLength(1)
   })
 
   test('malformed reports are dropped', () => {

@@ -1072,6 +1072,7 @@ usage.context_window: コンテキストウインドウ
 usage.context_free: 空き容量
 usage.context_reserve: 自動圧縮バッファ
 usage.context_estimate_hint: ≈ は推定値です
+usage.cached_snapshot: キャッシュされたスナップショット
 usage.plan_limits: プランの使用量上限
 usage.plan_limits_named: プランの使用量上限 · %{plan}
 usage.open_account_settings: アカウントの使用状況設定を開く

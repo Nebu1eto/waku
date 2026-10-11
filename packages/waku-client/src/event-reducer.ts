@@ -5,6 +5,7 @@ import type {
   ContextReport,
   ProviderReport,
   ProviderResumeCursor,
+  UsageReport,
   ReportedCommand,
   SequencedEvent,
   ThreadGoal,
@@ -274,7 +275,8 @@ export function reduceRuntimeEvent(
       break
     }
     case 'report': {
-      // A structured provider report (choco-pi's `/status`, `/context`).
+      // A structured provider report (choco-pi's `/status`, `/context`,
+      // `/usage`); a usage report's plan meters arrive as `planUsageUpdated`.
       // A `context` report is the session's live breakdown; an invoked one
       // also takes the place of its command's notice as a transcript card,
       // keeping that notice as the card's plain-text fallback.
@@ -637,7 +639,7 @@ export function asProviderReport(payload: unknown): ProviderReport | null {
   if (
     !value
     || value.schema !== 1
-    || (value.kind !== 'status' && value.kind !== 'context')
+    || (value.kind !== 'status' && value.kind !== 'context' && value.kind !== 'usage')
     || typeof value.at !== 'string'
     || typeof value.title !== 'string'
     || !value.title.trim()
@@ -646,8 +648,55 @@ export function asProviderReport(payload: unknown): ProviderReport | null {
   ) {
     return null
   }
-  if (value.context != null && !isContextReport(value.context)) return null
+  if (value.context != null && (value.kind !== 'context' || !isContextReport(value.context))) return null
+  if (value.usage != null && (value.kind !== 'usage' || !isUsageReport(value.usage))) return null
   return value as unknown as ProviderReport
+}
+
+function isOptional(value: unknown, check: (value: unknown) => boolean) {
+  return value == null || check(value)
+}
+
+const isString = (value: unknown) => typeof value === 'string'
+const isTime = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+
+function isUsageReport(value: unknown): value is UsageReport {
+  const usage = asRecord(value)
+  return Boolean(
+    usage
+      && isOptional(usage.observedAt, isTime)
+      && Array.isArray(usage.providers)
+      && usage.providers.every((entry) => {
+        const provider = asRecord(entry)
+        const cached = asRecord(provider?.cached)
+        return Boolean(
+          provider
+            && isString(provider.name)
+            && isOptional(provider.plan, isString)
+            && isOptional(provider.status, isString)
+            && (provider.cached == null || (cached && isOptional(cached.at, isTime) && isOptional(cached.reason, isString)))
+            && Array.isArray(provider.windows)
+            && provider.windows.every(isUsageWindow),
+        )
+      }),
+  )
+}
+
+function isUsageWindow(value: unknown) {
+  const window = asRecord(value)
+  const pace = asRecord(window?.pace)
+  return Boolean(
+    window
+      && isString(window.label)
+      && typeof window.percent === 'number'
+      && Number.isFinite(window.percent)
+      && (window.qualifier === 'used' || window.qualifier === 'remaining')
+      && isOptional(window.resetsAt, isTime)
+      && isOptional(window.resetLabel, isString)
+      && isOptional(window.detail, isString)
+      && isOptional(window.windowSeconds, isCount)
+      && (window.pace == null || (pace && (pace.health === 'over' || pace.health === 'under') && isString(pace.label))),
+  )
 }
 
 function isReportSection(value: unknown) {

@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "kind": "context",
+  "at": "2026-10-11T09:27:51.655Z",
+  "sessionId": "01a12a4a-329b-7793-8679-f8e8ef126970",
+  "title": "Context Usage",
+  "sections": [
+    {
+      "title": "Usage",
+      "rows": [
+        {
+          "label": "Model",
+          "value": "claude-fable-5-1"
+        },
+        {
+          "label": "Total",
+          "value": "6.9k/600k tokens (1.1%; estimated)"
+        },
+        {
+          "label": "System prompt",
+          "value": "1.5k tokens (0.2%)",
+          "hint": "estimated"
+        },
+        {
+          "label": "System tools",
+          "value": "2.6k tokens (0.4%)",
+          "hint": "estimated"
+        },
+        {
+          "label": "MCP tools",
+          "value": "0 tokens (0.0%)",
+          "hint": "estimated"
+        },
+        {
+          "label": "Custom agents",
+          "value": "1.1k tokens (0.2%)",
+          "hint": "estimated"
+        },
+        {
+          "label": "Context files",
+          "value": "7 tokens (0.0%)",
+          "hint": "estimated"
+        },
+        {
+          "label": "Skills",
+          "value": "1.7k tokens (0.3%)",
+          "hint": "estimated"
+        },
+        {
+          "label": "Messages",
+          "value": "0 tokens (0.0%)",
+          "hint": "estimated"
+        },
+        {
+          "label": "Free space",
+          "value": "577k tokens (96.1%)"
+        },
+        {
+          "label": "Autocompact buffer",
+          "value": "16k tokens (2.7%)"
+        }
+      ]
+    },
+    {
+      "title": "Inventory",
+      "rows": [
+        {
+          "label": "Tools",
+          "value": "12 active · 166 deferred"
+        },
+        {
+          "label": "MCP tools",
+          "value": "2 servers · 80 tools · 0 tokens"
+        },
+        {
+          "label": "Custom agents",
+          "value": "4 tools · 1.1k tokens"
+        },
+        {
+          "label": "Context files",
+          "value": "1 file · 7 tokens"
+        },
+        {
+          "label": "Skills",
+          "value": "21 skills · 1.7k tokens"
+        }
+      ]
+    }
+  ],
+  "context": {
+    "model": "anthropic/claude-fable-5-1",
+    "contextWindow": 600000,
+    "measuredTokens": null,
+    "estimatedTokens": 6876,
+    "autocompactReserve": 16384,
+    "categories": [
+      {
+        "label": "System prompt",
+        "tokens": 1497,
+        "estimated": true
+      },
+      {
+        "label": "System tools",
+        "tokens": 2567,
+        "estimated": true
+      },
+      {
+        "label": "MCP tools",
+        "tokens": 0,
+        "estimated": true
+      },
+      {
+        "label": "Custom agents",
+        "tokens": 1071,
+        "estimated": true
+      },
+      {
+        "label": "Context files",
+        "tokens": 7,
+        "estimated": true
+      },
+      {
+        "label": "Skills",
+        "tokens": 1734,
+        "estimated": true
+      },
+      {
+        "label": "Messages",
+        "tokens": 0,
+        "estimated": true
+      }
+    ],
+    "tools": {
+      "active": 12,
+      "deferred": 166
+    },
+    "mcp": {
+      "servers": [
+        {
+          "name": "1password",
+          "tools": 8,
+          "tokens": 1051
+        },
+        {
+          "name": "proxyman",
+          "tools": 72,
+          "tokens": 12256
+        }
+      ]
+    },
+    "skills": {
+      "count": 21,
+      "tokens": 1734
+    },
+    "contextFiles": {
+      "count": 1,
+      "tokens": 7
+    }
+  }
+}

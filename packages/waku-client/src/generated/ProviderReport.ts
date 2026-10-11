@@ -2,15 +2,16 @@
 import type { ContextReport } from "./ContextReport";
 import type { ProviderReportKind } from "./ProviderReportKind";
 import type { ProviderReportSection } from "./ProviderReportSection";
+import type { UsageReport } from "./UsageReport";
 
 /**
- * A structured `/status` or `/context` report published by choco-pi over
- * Pi RPC `setStatus`. Unknown fields are ignored so newer publishers stay
- * readable; anything this build would misread fails
+ * A structured `/status`, `/context`, or `/usage` report published by
+ * choco-pi over Pi RPC `setStatus`. Unknown fields are ignored so newer
+ * publishers stay readable; anything this build would misread fails
  * [`ProviderReport::parse`] instead of being guessed.
  */
 export type ProviderReport = { schema: number, kind: ProviderReportKind,
 /**
  * ISO-8601 time the provider took the report.
  */
-at: string, sessionId?: string | null, title: string, sections: Array<ProviderReportSection>, context?: ContextReport | null, };
+at: string, sessionId?: string | null, title: string, sections: Array<ProviderReportSection>, context?: ContextReport | null, usage?: UsageReport | null, };

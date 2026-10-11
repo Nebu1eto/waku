@@ -899,9 +899,10 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
     )
 }
 
-/// A provider report (choco-pi's `/status`, `/context`) as a card: its
-/// sections as label/value tables, and for `context` the occupancy and its
-/// stacked breakdown first. Builds only from the report in the message.
+/// A provider report (choco-pi's `/status`, `/context`, `/usage`) as a card:
+/// its sections as label/value tables, for `context` the occupancy and its
+/// stacked breakdown first, and for `usage` per-provider quota lanes in
+/// place of the sections. Builds only from the report in the message.
 fn render_report_card(theme: &Theme, report: &ProviderReport) -> Div {
     let mut card = div()
         .w_full()
@@ -970,6 +971,14 @@ fn render_report_card(theme: &Theme, report: &ProviderReport) -> Div {
                     .child(tr!("usage.context_estimate_hint")),
             );
         }
+    }
+
+    // A usage report's typed block draws each provider's quota lanes; its
+    // sections repeat the same figures as text and stay the fallback.
+    if report.kind == ProviderReportKind::Usage
+        && let Some(usage) = report.usage.as_ref()
+    {
+        return card.child(super::usage_meter::usage_report_blocks(theme, usage));
     }
 
     for section in &report.sections {

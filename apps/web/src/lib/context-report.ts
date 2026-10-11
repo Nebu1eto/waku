@@ -62,3 +62,35 @@ export function breakdownSegments(report: ContextReport): BreakdownSegment[] {
     .filter(([, tokens]) => tokens > 0)
     .map(([part, tokens]) => ({ part, tokens, fraction: tokens / total }))
 }
+
+/**
+ * A window's reset as the provider phrases it when its verb is not a plain
+ * "resets" (a regenerating bucket): "regenerates in 3h 20m", the way its
+ * text report reads. `null` means the localized reset label applies.
+ * Mirrors the desktop's `usage_window_reset`.
+ */
+export function providerResetPhrase(
+  label: string | null | undefined,
+  resetsAt: number,
+  nowSeconds: number,
+): string | null {
+  const verb = label?.trim()
+  if (!verb || verb.toLowerCase() === 'resets') return null
+  const delta = resetsAt - nowSeconds
+  if (delta <= 0) return `${verb} soon`
+  const total = Math.ceil(delta / 60)
+  const days = Math.floor(total / 1440)
+  const hours = Math.floor((total % 1440) / 60)
+  const minutes = days > 0 ? 0 : total % 60
+  const span = [[days, 'd'], [hours, 'h'], [minutes, 'm']]
+    .filter(([value]) => Number(value) > 0)
+    .map(([value, unit]) => `${value}${unit}`)
+    .join(' ')
+  return `${verb} in ${span}`
+}
+
+/** The share of a quota window spent, whichever way the provider counts. */
+export function usedPercent(window: { percent: number; qualifier: 'used' | 'remaining' }) {
+  const percent = Math.min(100, Math.max(0, window.percent))
+  return window.qualifier === 'remaining' ? 100 - percent : percent
+}

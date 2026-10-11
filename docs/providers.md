@@ -535,35 +535,53 @@ commands such as `/context` or `/daybreak on`. A notice raised outside a turn
 while Waku's own request (handshake, `/host-bridge …`, `/goal …`) is in flight
 answers Waku and is dropped.
 
-**Reports.** `/status` and `/context` also publish a structured report as
+**Reports.** `/status`, `/context`, and `/usage` (or `/quota`) also publish a
+structured report as
 `setStatus(<hostBridge.reportStatusKey>, JSON)` — `"choco-pi.report"` when the
 marker names none. choco-pi sends one right before the command's plain-text
 `notify`, and a `context` report on its own at session start, after each turn,
-and on model change.
+and on model change. A `usage` report also comes on its own after a session's
+first turn end, then at most every 10 minutes.
 
 ```ts
-{ schema: 1, kind: "status" | "context", at: string /* ISO */, sessionId, title,
+{ schema: 1, kind: "status" | "context" | "usage", at: string /* ISO */, sessionId, title,
   sections: [{ title, rows: [{ label, value, hint? }] }],
   context?: { model, contextWindow, measuredTokens: number | null, estimatedTokens,
               autocompactReserve, categories: [{ label, tokens, estimated }],
               tools: { active, deferred }, mcp: { servers: [{ name, tools, tokens, state? }] },
-              skills: { count, tokens }, contextFiles: { count, tokens } } }
+              skills: { count, tokens }, contextFiles: { count, tokens } },
+  usage?: { observedAt /* ISO */, providers: [{ name, plan?, status?,
+            cached?: { at /* ISO */, reason? },
+            windows: [{ label, percent /* 0..100 */, qualifier: "used" | "remaining",
+                        resetsAt? /* ISO */, resetLabel?, detail?, windowSeconds?,
+                        pace?: { health: "over" | "under", label } }] }] } }
 ```
 
 The driver parses each frame into a `Report` event; a frame with another
-schema, an unknown `kind`, no title, a `status` carrying `context`, or counts
-that are not finite non-negative numbers is dropped (a debug build logs why),
-and unknown fields are ignored. A `context` report becomes the session's live
+schema, an unknown `kind`, no title, `context` or `usage` on a report of
+another kind, counts that are not finite non-negative numbers, a non-numeric
+percent, an unknown qualifier or pace, or more than 16 providers or 64 windows
+is dropped (a debug build logs why), and unknown fields are ignored. A percent
+is clamped to 0–100; usage times become Unix milliseconds, and one that does
+not parse is dropped rather than failing the frame. A `context` report becomes the session's live
 `latest_context_report`, which is never persisted: the ⌘U panel shows its
 stacked breakdown (categories, then free space, then the autocompact reserve)
 and the meter uses `estimatedTokens`, marked “≈”, until a model call has
-measured anything. The driver pairs a report with a `notify` that starts with
-the report's title and arrives within 2 s in the same run; it drops that
+measured anything. A `usage` report with at least one window also emits
+`PlanUsageUpdated`, which fills the ⌘U plan meters as Claude and Codex do:
+each window becomes a `"<provider> <label>"` lane of percent used
+(`remaining` reads as `100 − percent`) resetting at `resetsAt`, and the plan
+label joins `"<provider> <plan>"` for every provider naming a plan. A snapshot
+replaces the previous one whole; a report with no window keeps it. The driver
+pairs a report with a `notify` that starts with the report's title or its
+first section's title (`/status` opens with "Session Info", `/usage` with the
+first provider's name) and arrives within 2 s in the same run; it drops that
 notice and re-emits the report as invoked, carrying the notice text. Pairing
 lives in the driver so the desktop and web reducers stay deterministic when the
 daemon replays events. An invoked report becomes a system message whose
 `report` renders as a card — sections as label/value tables, `context` with its
-bar — and whose `content` keeps the notice as the plain-text fallback. The
+bar, `usage` as per-provider quota lanes in place of its sections — and whose
+`content` keeps the notice as the plain-text fallback. The
 report is stored as JSON in the `messages.report` column, so the card survives
 reload.
 

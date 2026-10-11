@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "kind": "status",
+  "at": "2026-10-11T09:27:51.649Z",
+  "sessionId": "01a12a4a-329b-7793-8679-f8e8ef126970",
+  "title": "Status",
+  "sections": [
+    {
+      "title": "Session Info",
+      "rows": [
+        {
+          "label": "File",
+          "value": "In-memory"
+        },
+        {
+          "label": "ID",
+          "value": "01a12a4a-329b-7793-8679-f8e8ef126970"
+        },
+        {
+          "label": "Messages",
+          "value": "0 total · 0 user · 0 assistant · 0 tool calls"
+        },
+        {
+          "label": "Tokens",
+          "value": "0 in · 0 out"
+        },
+        {
+          "label": "Cache warming",
+          "value": "unavailable"
+        }
+      ]
+    },
+    {
+      "title": "Environment",
+      "rows": [
+        {
+          "label": "Pi version",
+          "value": "1.0.4"
+        },
+        {
+          "label": "Session started",
+          "value": "11/10/2026, 18:27:48"
+        },
+        {
+          "label": "cwd",
+          "value": "/private/tmp/choco-pi/01a1295d-078e-74f8-9b93-1bacf55a4fb4/report-probe/project-zYbEYi"
+        },
+        {
+          "label": "Model",
+          "value": "Claude Fable 5.1 (claude-fable-5-1)"
+        },
+        {
+          "label": "Model provider",
+          "value": "anthropic"
+        },
+        {
+          "label": "Context window",
+          "value": "600,000 tokens · soft cap (native 1,000,000)"
+        },
+        {
+          "label": "Context usage",
+          "value": "0.0% (0 tokens) · details in /context"
+        },
+        {
+          "label": "Reasoning effort",
+          "value": "low"
+        },
+        {
+          "label": "Context files",
+          "value": "1 loaded",
+          "hint": "AGENTS.md"
+        },
+        {
+          "label": "Skills",
+          "value": "21 loaded",
+          "hint": "check, commit, effective-writing, review, task, task-core, task-dynamic, task-hotfix, task-inline, agent-browser, epub-translator, find-skills, pdf-translator, react-native-best-practices, vercel-react-best-practices, figma, mcp-scripting, choco-pi-lsp-ast-grep, choco-pi-lsp-navigation, choco-pi-lsp-write-ast-grep-rule, choco-pi-lsp-write-tree-sitter-rule"
+        },
+        {
+          "label": "Agent roles",
+          "value": "7 defined",
+          "hint": "advisor\nexplore (openai-codex/gpt-6.1-sol, low)\ngeneral (openai-codex/gpt-6.1-sol, medium)\nhandoff (openai-codex/gpt-6.1-sol, low)\nimplementer (anthropic/claude-opus-5-5, medium)\nplanner (anthropic/claude-fable-5-1, medium)\nreviewer (openai-codex/gpt-6-astra, medium)"
+        },
+        {
+          "label": "MCP servers",
+          "value": "7 configured (see /mcp)"
+        },
+        {
+          "label": "Theme",
+          "value": "nord-dark"
+        },
+        {
+          "label": "Packages",
+          "value": "17 configured · pi-coding-agent 1.0.4"
+        },
+        {
+          "label": "Daybreak",
+          "value": "auto; requested; current authentication is not eligible"
+        },
+        {
+          "label": "Fast mode",
+          "value": "off"
+        }
+      ]
+    }
+  ]
+}

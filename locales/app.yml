@@ -2096,6 +2096,8 @@ usage.context_reserve:
   en: Autocompact buffer
 usage.context_estimate_hint:
   en: ≈ marks an estimate
+usage.cached_snapshot:
+  en: Cached snapshot
 usage.plan_limits:
   en: Plan usage limits
 usage.plan_limits_named:

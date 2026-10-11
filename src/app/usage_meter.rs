@@ -478,6 +478,153 @@ pub(super) fn context_breakdown(theme: &Theme, report: &ContextReport) -> Div {
         .children(rows)
 }
 
+/// A window's reset time as a `usage` card shows it: the localized reset
+/// phrase for an ordinary reset, else the provider's own verb (such as
+/// "regenerates", in its language) with a compact countdown, as its text
+/// report reads.
+pub(super) fn usage_window_reset(
+    window: &crate::model::UsageReportWindow,
+    now: i64,
+) -> Option<String> {
+    let resets_at = window.resets_at?.div_euclid(1_000);
+    match window.reset_label.as_deref().map(str::trim) {
+        None | Some("") => Some(reset_label(resets_at, now)),
+        Some(label) if label.eq_ignore_ascii_case("resets") => Some(reset_label(resets_at, now)),
+        Some(label) => {
+            let delta = resets_at - now;
+            if delta <= 0 {
+                return Some(format!("{label} soon"));
+            }
+            let minutes = (delta + 59) / 60;
+            let (days, hours, minutes) = (minutes / 1440, minutes % 1440 / 60, minutes % 60);
+            let span = [
+                (days, "d"),
+                (hours, "h"),
+                (if days > 0 { 0 } else { minutes }, "m"),
+            ]
+            .into_iter()
+            .filter(|(value, _)| *value > 0)
+            .map(|(value, unit)| format!("{value}{unit}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+            Some(format!("{label} in {span}"))
+        }
+    }
+}
+
+/// A `usage` report's providers for its transcript card: a heading with
+/// plan, status, and cache note, then one quota lane per window, the
+/// plan panel's lane, always read as percent used. Builds only from the
+/// report in the message.
+pub(super) fn usage_report_blocks(theme: &Theme, usage: &crate::model::UsageReport) -> Div {
+    let now = unix_time() as i64;
+    let mut blocks = div().flex().flex_col().gap(px(12.0));
+    for provider in &usage.providers {
+        let summary = [provider.plan.as_deref(), provider.status.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        let cached =
+            provider
+                .cached
+                .as_ref()
+                .map(|cached| match cached.reason.as_deref().map(str::trim) {
+                    Some(reason) if !reason.is_empty() => {
+                        format!("{} \u{b7} {reason}", tr!("usage.cached_snapshot"))
+                    }
+                    _ => tr!("usage.cached_snapshot"),
+                });
+        let mut block = div().flex().flex_col().gap(px(7.0)).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(SharedString::from(provider.name.clone())),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .truncate()
+                        .text_color(theme.text_secondary)
+                        .child(SharedString::from(summary)),
+                ),
+        );
+        if let Some(cached) = cached {
+            block = block.child(
+                div()
+                    .text_size(sp(11.5))
+                    .text_color(theme.text_tertiary)
+                    .child(SharedString::from(cached)),
+            );
+        }
+        for window in &provider.windows {
+            let used = window.used_percent();
+            let detail = [
+                window.pace.as_ref().map(|pace| pace.label.as_str()),
+                window.detail.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+            block = block.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .truncate()
+                                    .text_color(theme.text)
+                                    .child(SharedString::from(window.label.clone())),
+                            )
+                            .children(usage_window_reset(window, now).map(|reset| {
+                                div()
+                                    .flex_none()
+                                    .text_color(theme.text_tertiary)
+                                    .child(SharedString::from(reset))
+                            }))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(theme.text_secondary)
+                                    .child(SharedString::from(format!("{used:.0}%"))),
+                            ),
+                    )
+                    .child(meter_bar(theme, used))
+                    .when(!detail.is_empty(), |lane| {
+                        lane.child(
+                            div()
+                                .text_size(sp(11.5))
+                                .text_color(theme.text_tertiary)
+                                .child(SharedString::from(detail)),
+                        )
+                    }),
+            );
+        }
+        blocks = blocks.child(block);
+    }
+    blocks
+}
+
 /// The context-window figures the usage panel renders.
 struct MeterContext<'a> {
     usage: Option<ContextUsage>,
@@ -957,5 +1104,42 @@ mod tests {
             }),
             None
         );
+    }
+
+    /// A provider verb other than "resets" keeps the provider's phrase with
+    /// a compact countdown; no time means no reset line.
+    #[test]
+    fn usage_card_reset_uses_the_provider_verb_for_regenerating_buckets() {
+        let window = |reset_label: Option<&str>, resets_at: Option<i64>| {
+            serde_json::from_value::<crate::model::UsageReportWindow>(serde_json::json!({
+                "label": "Weekly credits", "percent": 10, "qualifier": "used",
+                "resetsAt": resets_at, "resetLabel": reset_label,
+            }))
+            .unwrap()
+        };
+        let now = 1_000_000;
+        let in_ms = |seconds: i64| Some((now + seconds) * 1_000);
+        assert_eq!(
+            usage_window_reset(&window(Some("regenerates"), in_ms(3 * 3600 + 20 * 60)), now)
+                .as_deref(),
+            Some("regenerates in 3h 20m")
+        );
+        assert_eq!(
+            usage_window_reset(
+                &window(Some("regenerates"), in_ms(2 * 86_400 + 3600 + 5)),
+                now
+            )
+            .as_deref(),
+            Some("regenerates in 2d 1h")
+        );
+        assert_eq!(
+            usage_window_reset(&window(Some("regenerates"), in_ms(-5)), now).as_deref(),
+            Some("regenerates soon")
+        );
+        assert_eq!(
+            usage_window_reset(&window(Some("resets"), in_ms(600)), now),
+            Some(reset_label(now + 600, now))
+        );
+        assert_eq!(usage_window_reset(&window(Some("resets"), None), now), None);
     }
 }

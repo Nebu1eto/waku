@@ -1988,9 +1988,10 @@ pub enum DriverEvent {
         level: NoticeLevel,
         message: String,
     },
-    /// A structured provider report (choco-pi's `/status` and `/context`).
-    /// Every report refreshes the session's state — a `context` report
-    /// becomes [`AgentSession::latest_context_report`]. `invoked` marks a
+    /// A structured provider report (choco-pi's `/status`, `/context`, and
+    /// `/usage`). Every report refreshes the session's state — a `context`
+    /// report becomes [`AgentSession::latest_context_report`], and a `usage`
+    /// one is followed by [`DriverEvent::PlanUsageUpdated`]. `invoked` marks a
     /// report the user asked for: the driver paired it with the command's
     /// plain-text notice, which it suppressed, so the client shows the
     /// report as a transcript card in that notice's place. `notice` is that
@@ -2018,17 +2019,20 @@ pub const PROVIDER_REPORT_SCHEMA: u32 = 1;
 const PROVIDER_REPORT_MAX_SECTIONS: usize = 64;
 const PROVIDER_REPORT_MAX_ROWS: usize = 512;
 const PROVIDER_REPORT_MAX_CATEGORIES: usize = 64;
+const PROVIDER_REPORT_MAX_USAGE_PROVIDERS: usize = 16;
+const PROVIDER_REPORT_MAX_USAGE_WINDOWS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderReportKind {
     Status,
     Context,
+    Usage,
 }
 
-/// A structured `/status` or `/context` report published by choco-pi over
-/// Pi RPC `setStatus`. Unknown fields are ignored so newer publishers stay
-/// readable; anything this build would misread fails
+/// A structured `/status`, `/context`, or `/usage` report published by
+/// choco-pi over Pi RPC `setStatus`. Unknown fields are ignored so newer
+/// publishers stay readable; anything this build would misread fails
 /// [`ProviderReport::parse`] instead of being guessed.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2043,6 +2047,8 @@ pub struct ProviderReport {
     pub sections: Vec<ProviderReportSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageReport>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
@@ -2198,8 +2204,8 @@ impl ProviderReport {
             return Err("the report has too many sections or rows".to_owned());
         }
         match (self.kind, &self.context) {
-            (ProviderReportKind::Status, Some(_)) => {
-                return Err("a status report carries a context breakdown".to_owned());
+            (ProviderReportKind::Status | ProviderReportKind::Usage, Some(_)) => {
+                return Err("only a context report carries a context breakdown".to_owned());
             }
             (ProviderReportKind::Context, Some(context))
                 if context.categories.len() > PROVIDER_REPORT_MAX_CATEGORIES =>
@@ -2208,8 +2214,202 @@ impl ProviderReport {
             }
             _ => {}
         }
+        match (self.kind, &self.usage) {
+            (ProviderReportKind::Status | ProviderReportKind::Context, Some(_)) => {
+                return Err("only a usage report carries a usage block".to_owned());
+            }
+            (ProviderReportKind::Usage, Some(usage))
+                if usage.providers.len() > PROVIDER_REPORT_MAX_USAGE_PROVIDERS
+                    || usage
+                        .providers
+                        .iter()
+                        .map(|provider| provider.windows.len())
+                        .sum::<usize>()
+                        > PROVIDER_REPORT_MAX_USAGE_WINDOWS =>
+            {
+                return Err("the usage report has too many providers or windows".to_owned());
+            }
+            _ => {}
+        }
         Ok(())
     }
+}
+
+/// The quota block of a `usage` report: each account provider choco-pi
+/// reads (Claude, ChatGPT, …) with its rate-limit windows. Times arrive as
+/// ISO-8601 and are kept as Unix milliseconds; an unreadable time is dropped
+/// rather than failing the report.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReport {
+    /// When the provider finished reading usage (Unix milliseconds).
+    #[serde(
+        default,
+        deserialize_with = "report_time",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub observed_at: Option<i64>,
+    pub providers: Vec<UsageReportProvider>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportProvider {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Set when the provider answered from its store instead of live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached: Option<UsageReportCached>,
+    pub windows: Vec<UsageReportWindow>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportCached {
+    /// When the stored snapshot was taken (Unix milliseconds).
+    #[serde(
+        default,
+        deserialize_with = "report_time",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageReportQualifier {
+    Used,
+    Remaining,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageReportPaceHealth {
+    Over,
+    Under,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportPace {
+    pub health: UsageReportPaceHealth,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportWindow {
+    pub label: String,
+    /// 0–100, read per [`Self::qualifier`]; clamped on parse.
+    #[serde(deserialize_with = "report_percent")]
+    pub percent: f64,
+    pub qualifier: UsageReportQualifier,
+    /// When the window resets (Unix milliseconds).
+    #[serde(
+        default,
+        deserialize_with = "report_time",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub resets_at: Option<i64>,
+    /// The provider's verb for [`Self::resets_at`], such as "resets" or
+    /// "regenerates".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "report_optional_tokens",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub window_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pace: Option<UsageReportPace>,
+}
+
+impl UsageReportWindow {
+    /// The share of the window spent, whichever way the provider counts.
+    pub fn used_percent(&self) -> f64 {
+        match self.qualifier {
+            UsageReportQualifier::Used => self.percent,
+            UsageReportQualifier::Remaining => 100.0 - self.percent,
+        }
+    }
+}
+
+impl UsageReport {
+    /// The report as the account plan meters every provider feeds: each
+    /// window becomes a "<provider> <window>" lane of used percent, and the
+    /// plan label names every provider that reported a plan.
+    pub fn plan_usage(&self) -> crate::usage::PlanUsage {
+        let plans = self
+            .providers
+            .iter()
+            .filter_map(|provider| {
+                let plan = provider.plan.as_deref()?.trim();
+                (!plan.is_empty()).then(|| format!("{} {plan}", provider.name.trim()))
+            })
+            .collect::<Vec<_>>();
+        crate::usage::PlanUsage {
+            plan_label: (!plans.is_empty()).then(|| plans.join(", ")),
+            windows: self
+                .providers
+                .iter()
+                .flat_map(|provider| {
+                    provider
+                        .windows
+                        .iter()
+                        .map(|window| crate::usage::PlanWindow {
+                            label: format!("{} {}", provider.name.trim(), window.label.trim()),
+                            percent: window.used_percent(),
+                            resets_at: window.resets_at.map(|millis| millis.div_euclid(1_000)),
+                        })
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A percentage from a JavaScript publisher: any finite number, clamped to
+/// 0–100.
+fn report_percent<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = f64::deserialize(deserializer)?;
+    if value.is_finite() {
+        Ok(value.clamp(0.0, 100.0))
+    } else {
+        Err(D::Error::custom("a percentage must be a finite number"))
+    }
+}
+
+/// A time as Unix milliseconds: an ISO-8601 string from the publisher, or
+/// the number this build itself serialized. Anything unreadable is dropped.
+fn report_time<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(
+        match Option::<serde_json::Value>::deserialize(deserializer)? {
+            Some(serde_json::Value::String(text)) => chrono::DateTime::parse_from_rfc3339(&text)
+                .ok()
+                .map(|time| time.timestamp_millis()),
+            Some(serde_json::Value::Number(number)) => number.as_i64().or_else(|| {
+                number
+                    .as_f64()
+                    .filter(|value| value.is_finite() && value.abs() < 9_007_199_254_740_992.0)
+                    .map(|value| value.round() as i64)
+            }),
+            _ => None,
+        },
+    )
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, TS)]
@@ -5177,5 +5377,176 @@ mod tests {
         assert!(projection.transcript_blocks.is_empty());
         assert!(projection.turns.is_empty());
         assert!(projection.queued_messages.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod usage_report_tests {
+    use super::*;
+
+    /// Hand-written to choco-pi's `usageReportFrame` shape: no probe
+    /// capture of a usage frame existed when these tests were written.
+    fn usage_frame() -> serde_json::Value {
+        serde_json::json!({
+            "schema": 1, "kind": "usage", "at": "2026-10-11T08:00:00.000Z",
+            "sessionId": "s1", "title": "Usage",
+            "sections": [
+                {"title": "Claude", "rows": [{"label": "Plan", "value": "Max"}]},
+                {"title": "ChatGPT", "rows": [{"label": "Quota", "value": "no quota windows"}]}
+            ],
+            "usage": {
+                "observedAt": "2026-10-11T08:00:00.000Z",
+                "providers": [
+                    {"name": "Claude", "plan": "Max", "cached": {"at": "2026-10-11T07:55:00Z", "reason": "throttled"},
+                     "windows": [
+                        {"label": "5h session", "percent": 42.5, "qualifier": "used",
+                         "resetsAt": "2026-10-11T10:00:00.000Z", "resetLabel": "resets",
+                         "windowSeconds": 18000, "pace": {"health": "over", "label": "ahead of pace"},
+                         "futureField": 1},
+                        {"label": "Weekly", "percent": 70, "qualifier": "remaining", "resetsAt": "not a time"}
+                     ]},
+                    {"name": "ChatGPT", "status": "unavailable (401)", "windows": []}
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn usage_reports_parse_validate_and_round_trip() {
+        let report = ProviderReport::parse(&usage_frame().to_string()).unwrap();
+        assert_eq!(report.kind, ProviderReportKind::Usage);
+        let usage = report.usage.as_ref().unwrap();
+        assert_eq!(usage.observed_at, Some(1_791_705_600_000));
+        let claude = &usage.providers[0];
+        assert_eq!(claude.cached.as_ref().unwrap().at, Some(1_791_705_300_000));
+        let session = &claude.windows[0];
+        assert_eq!(session.resets_at, Some(1_791_712_800_000));
+        assert_eq!(session.window_seconds, Some(18_000));
+        assert_eq!(
+            session.pace.as_ref().map(|pace| pace.health),
+            Some(UsageReportPaceHealth::Over)
+        );
+        // An unreadable time is dropped, not fatal; remaining reads as used.
+        let weekly = &claude.windows[1];
+        assert_eq!(weekly.resets_at, None);
+        assert_eq!(weekly.used_percent(), 30.0);
+
+        // Serialized times are numbers; they read back unchanged.
+        let text = serde_json::to_string(&report).unwrap();
+        assert!(text.contains("\"resetsAt\":1791712800000"), "{text}");
+        assert_eq!(ProviderReport::parse(&text).unwrap(), report);
+
+        // A percent outside 0..100 clamps.
+        let mut frame = usage_frame();
+        frame["usage"]["providers"][0]["windows"][0]["percent"] = serde_json::json!(140.2);
+        let clamped = ProviderReport::parse(&frame.to_string()).unwrap();
+        assert_eq!(
+            clamped.usage.unwrap().providers[0].windows[0].percent,
+            100.0
+        );
+
+        // Without the typed block the report still reads, for its sections.
+        let mut frame = usage_frame();
+        frame.as_object_mut().unwrap().remove("usage");
+        assert!(
+            ProviderReport::parse(&frame.to_string())
+                .unwrap()
+                .usage
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn misread_usage_reports_are_rejected() {
+        let window = serde_json::json!({"label": "w", "percent": 1, "qualifier": "used"});
+        for (pointer, replacement) in [
+            (
+                "/usage/providers/0/windows/0/percent",
+                serde_json::json!("42%"),
+            ),
+            (
+                "/usage/providers/0/windows/0/qualifier",
+                serde_json::json!("left"),
+            ),
+            (
+                "/usage/providers/0/windows/0/pace/health",
+                serde_json::json!("exhausted"),
+            ),
+            ("/usage/providers/1/windows", serde_json::json!(null)),
+            (
+                "/usage/providers",
+                serde_json::json!(vec![serde_json::json!({"name": "p", "windows": []}); 17]),
+            ),
+            (
+                "/usage/providers/1/windows",
+                serde_json::json!(vec![window; 63]),
+            ),
+            ("/kind", serde_json::json!("status")),
+            ("/kind", serde_json::json!("context")),
+        ] {
+            let mut frame = usage_frame();
+            *frame.pointer_mut(pointer).unwrap() = replacement;
+            assert!(
+                ProviderReport::parse(&frame.to_string()).is_err(),
+                "{pointer}"
+            );
+        }
+    }
+
+    /// Frames captured from choco-pi 1.0.4 over live RPC (`/status`,
+    /// `/context`, `/usage`); the contract check the hand-written fixtures
+    /// above cannot give.
+    #[test]
+    fn real_choco_pi_report_frames_parse() {
+        let status = ProviderReport::parse(include_str!("fixtures/choco_pi_report_status.json"))
+            .expect("status frame");
+        assert_eq!(status.kind, ProviderReportKind::Status);
+        assert_eq!(
+            status.sections.first().map(|s| s.title.as_str()),
+            Some("Session Info")
+        );
+
+        let context = ProviderReport::parse(include_str!("fixtures/choco_pi_report_context.json"))
+            .expect("context frame");
+        assert_eq!(context.kind, ProviderReportKind::Context);
+        let context_block = context.context.as_ref().expect("context block");
+        assert!(context_block.context_window > 0);
+        assert!(!context_block.categories.is_empty());
+
+        let usage = ProviderReport::parse(include_str!("fixtures/choco_pi_report_usage.json"))
+            .expect("usage frame");
+        assert_eq!(usage.kind, ProviderReportKind::Usage);
+        let providers = &usage.usage.as_ref().expect("usage block").providers;
+        assert_eq!(providers.len(), 3);
+        let plan = usage.usage.as_ref().expect("usage block").plan_usage();
+        // Claude (3 windows) + Synthetic (2); ChatGPT is "not connected".
+        assert_eq!(plan.windows.len(), 5);
+        assert!(
+            plan.windows
+                .iter()
+                .all(|w| (0.0..=100.0).contains(&w.percent))
+        );
+    }
+
+    #[test]
+    fn usage_reports_become_plan_usage_lanes() {
+        let report = ProviderReport::parse(&usage_frame().to_string()).unwrap();
+        let plan = report.usage.unwrap().plan_usage();
+        assert_eq!(plan.plan_label.as_deref(), Some("Claude Max"));
+        assert_eq!(
+            plan.windows,
+            [
+                crate::usage::PlanWindow {
+                    label: "Claude 5h session".into(),
+                    percent: 42.5,
+                    resets_at: Some(1_791_712_800),
+                },
+                crate::usage::PlanWindow {
+                    label: "Claude Weekly".into(),
+                    percent: 30.0,
+                    resets_at: None,
+                },
+            ]
+        );
     }
 }

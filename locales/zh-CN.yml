@@ -1021,6 +1021,7 @@ usage.context_window: 上下文窗口
 usage.context_free: 可用空间
 usage.context_reserve: 自动压缩缓冲区
 usage.context_estimate_hint: ≈ 表示估算值
+usage.cached_snapshot: 缓存的快照
 usage.plan_limits: 套餐用量限额
 usage.plan_limits_named: 套餐用量限额 · %{plan}
 usage.open_account_settings: 打开账户用量设置

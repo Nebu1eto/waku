@@ -1,6 +1,23 @@
 import { describe, expect, test } from 'bun:test'
 import type { ContextReport } from '@waku/client'
-import { breakdownSegments, meterUsage } from './context-report'
+import { breakdownSegments, meterUsage, providerResetPhrase, usedPercent } from './context-report'
+
+describe('usage report windows', () => {
+  test('remaining windows read as used, clamped', () => {
+    expect(usedPercent({ percent: 70, qualifier: 'remaining' })).toBe(30)
+    expect(usedPercent({ percent: 42, qualifier: 'used' })).toBe(42)
+    expect(usedPercent({ percent: 140, qualifier: 'used' })).toBe(100)
+  })
+
+  test('a provider verb other than "resets" keeps its phrase with a countdown', () => {
+    const now = 1_000_000
+    expect(providerResetPhrase('regenerates', now + 3 * 3600 + 20 * 60, now)).toBe('regenerates in 3h 20m')
+    expect(providerResetPhrase('regenerates', now + 2 * 86_400 + 3605, now)).toBe('regenerates in 2d 1h')
+    expect(providerResetPhrase('regenerates', now - 5, now)).toBe('regenerates soon')
+    expect(providerResetPhrase('resets', now + 600, now)).toBeNull()
+    expect(providerResetPhrase(null, now + 600, now)).toBeNull()
+  })
+})
 
 function report(measuredTokens: number | null): ContextReport {
   return {

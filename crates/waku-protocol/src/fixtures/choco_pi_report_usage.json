@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "kind": "usage",
+  "at": "2026-10-11T10:44:20.665Z",
+  "sessionId": "01a12a90-33aa-74bd-9b61-3751aa341806",
+  "title": "Usage",
+  "sections": [
+    {
+      "title": "Claude",
+      "rows": [
+        {
+          "label": "Plan",
+          "value": "Max (20x)"
+        },
+        {
+          "label": "5h",
+          "value": "6% used",
+          "hint": "resets in 3h 36m · 28% of window elapsed"
+        },
+        {
+          "label": "7d",
+          "value": "7% used",
+          "hint": "resets in 6d 20h · 2% of window elapsed"
+        },
+        {
+          "label": "Fable 7d",
+          "value": "11% used",
+          "hint": "resets in 6d 20h · 2% of window elapsed"
+        }
+      ]
+    },
+    {
+      "title": "ChatGPT",
+      "rows": [
+        {
+          "label": "Status",
+          "value": "not connected"
+        }
+      ]
+    },
+    {
+      "title": "Synthetic",
+      "rows": [
+        {
+          "label": "Five-hour requests",
+          "value": "0% used",
+          "hint": "regenerates in 4m · refill keeping up · No requests used"
+        },
+        {
+          "label": "Weekly credits",
+          "value": "84% used",
+          "hint": "regenerates 2% ($1.44) in 49m · refill keeping up · $11.52 remaining"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "observedAt": "2026-10-11T10:44:20.664Z",
+    "providers": [
+      {
+        "name": "Claude",
+        "windows": [
+          {
+            "label": "5h",
+            "percent": 6,
+            "qualifier": "used",
+            "resetsAt": "2026-10-11T14:19:59.977Z",
+            "resetLabel": "resets",
+            "windowSeconds": 18000
+          },
+          {
+            "label": "7d",
+            "percent": 7,
+            "qualifier": "used",
+            "resetsAt": "2026-10-18T06:59:59.977Z",
+            "resetLabel": "resets",
+            "windowSeconds": 604800
+          },
+          {
+            "label": "Fable 7d",
+            "percent": 11,
+            "qualifier": "used",
+            "resetsAt": "2026-10-18T06:59:59.977Z",
+            "resetLabel": "resets",
+            "windowSeconds": 604800
+          }
+        ],
+        "plan": "Max (20x)"
+      },
+      {
+        "name": "ChatGPT",
+        "windows": [],
+        "status": "not connected"
+      },
+      {
+        "name": "Synthetic",
+        "windows": [
+          {
+            "label": "Five-hour requests",
+            "percent": 0,
+            "qualifier": "used",
+            "resetsAt": "2026-10-11T10:47:27.000Z",
+            "resetLabel": "regenerates",
+            "detail": "No requests used",
+            "pace": {
+              "health": "under",
+              "label": "refill keeping up"
+            }
+          },
+          {
+            "label": "Weekly credits",
+            "percent": 84,
+            "qualifier": "used",
+            "resetsAt": "2026-10-11T11:32:54.000Z",
+            "resetLabel": "regenerates 2% ($1.44)",
+            "detail": "$11.52 remaining",
+            "pace": {
+              "health": "under",
+              "label": "refill keeping up"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
