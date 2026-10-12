@@ -223,24 +223,31 @@ pub(super) fn grok_computer_use_launch_configuration(
 }
 
 pub(super) fn provider_stderr_error(lines: Vec<String>) -> Option<String> {
-    let first_error = lines
-        .iter()
-        .find(|line| line.to_ascii_lowercase().contains("error"))?
-        .trim();
+    let first_error_index = lines.iter().position(|line| {
+        !is_stderr_trace_frame(line) && line.to_ascii_lowercase().contains("error")
+    })?;
+    let first_error = lines[first_error_index].trim();
 
     // CLI parsers can echo a rejected multi-line argument in full. The first
     // diagnostic already identifies the failure; forwarding the rest would
     // turn provider stderr into an enormous assistant message.
     if first_error.to_ascii_lowercase().starts_with("error:") {
-        return Some(truncate_error(first_error, 400));
+        let mut message = truncate_error(first_error, 400);
+        if lines
+            .get(first_error_index + 1)
+            .is_some_and(|line| is_stderr_trace_frame(line))
+        {
+            message.push('…');
+        }
+        return Some(message);
     }
 
     let mut message = String::new();
-    let first_error_index = lines
-        .iter()
-        .position(|line| line.trim() == first_error)
-        .unwrap_or_default();
     for line in lines.iter().skip(first_error_index).take(6) {
+        if is_stderr_trace_frame(line) {
+            message.push('…');
+            break;
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -254,6 +261,11 @@ pub(super) fn provider_stderr_error(lines: Vec<String>) -> Option<String> {
         }
     }
     Some(truncate_error(&message, 800))
+}
+
+fn is_stderr_trace_frame(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.len() < line.len() && trimmed.starts_with("at ")
 }
 
 fn truncate_error(message: &str, max_chars: usize) -> String {

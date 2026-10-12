@@ -9,10 +9,10 @@
 //! choco-pi is Pi with a profile on top. It keeps Pi's dialect and adds the
 //! host bridge (see [`super::pi_host_bridge`]) plus real user dialogs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 
 use super::pi_host_bridge::{self, HostBridgeState};
-use super::{activity, computer_use as computer_use_runtime};
+use super::{activity, computer_use as computer_use_runtime, support::provider_stderr_error};
 use crate::choco_pi_profile::{ChocoPiProfile, HostBridgeSpec};
 use crate::driver::{
     DriverControl, DriverEventSender, DriverEventSink, DriverStartOptions, SessionOptions,
@@ -435,56 +435,14 @@ impl PiDriver {
                         reader_dialogs,
                         bridge_live,
                     );
-                    let mut chunks = ChunkAssembly::default();
-                    for line in BufReader::new(stdout).lines() {
-                        match line {
-                            Ok(line) if !line.trim().is_empty() => {
-                                match serde_json::from_str::<Value>(&line) {
-                                    Ok(value) => {
-                                        // A chunked frame arrives as an
-                                        // uninterrupted run of `rpc_chunk`
-                                        // envelopes that reassemble into one
-                                        // logical message.
-                                        match chunks.accept(value) {
-                                            Ok(Some(value)) => handle_pi_message(
-                                                flavor,
-                                                value,
-                                                &reader_pending,
-                                                &reader_commands,
-                                                &reader_events,
-                                                &mut stream_state,
-                                            ),
-                                            Ok(None) => {}
-                                            Err(error) => {
-                                                let _ =
-                                                    reader_events.send(DriverEvent::Error(tr!(
-                                                        "errors.provider_transport_read",
-                                                        provider = flavor.display_name(),
-                                                        error = error
-                                                    )));
-                                            }
-                                        }
-                                    }
-                                    Err(error) => {
-                                        let _ = reader_events.send(DriverEvent::Error(tr!(
-                                            "errors.provider_invalid_json",
-                                            provider = flavor.display_name(),
-                                            error = error
-                                        )));
-                                    }
-                                }
-                            }
-                            Ok(_) => {}
-                            Err(error) => {
-                                let _ = reader_events.send(DriverEvent::Error(tr!(
-                                    "errors.provider_transport_read",
-                                    provider = flavor.display_name(),
-                                    error = error
-                                )));
-                                break;
-                            }
-                        }
-                    }
+                    read_pi_stdout(
+                        flavor,
+                        BufReader::new(stdout),
+                        &reader_pending,
+                        &reader_commands,
+                        &reader_events,
+                        &mut stream_state,
+                    );
                     // Unblock anything waiting on an RPC reply immediately; the
                     // process thread owns the `ProcessExited` announcement so a
                     // non-zero exit can be reported before the runtime is torn down.
@@ -920,21 +878,11 @@ impl PiDriver {
                 }
             })?;
 
-        let last_visible_stderr = Arc::new(Mutex::new(None::<String>));
-        let stderr_last_error = last_visible_stderr.clone();
-        let stderr_events = events.clone();
-        let stderr_thread =
-            thread::Builder::new()
-                .name("waku-pi-stderr".into())
-                .spawn(move || {
-                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                        if line.to_ascii_lowercase().contains("error") {
-                            let error = format!("{}: {}", flavor.display_name(), line.trim());
-                            *stderr_last_error.lock() = Some(error.clone());
-                            let _ = stderr_events.send(DriverEvent::Error(error));
-                        }
-                    }
-                })?;
+        // Stderr is diagnostic, not the RPC failure channel. In particular,
+        // Node can print an EPIPE trace while the agent keeps doing work.
+        let stderr_thread = thread::Builder::new()
+            .name("waku-pi-stderr".into())
+            .spawn(move || read_pi_stderr(BufReader::new(stderr)))?;
 
         // Nothing signals or kills the agent process: it exits when the writer
         // thread drops its stdin. Something still has to reap it, or every
@@ -944,25 +892,8 @@ impl PiDriver {
             .spawn(move || {
                 let status = child.wait();
                 let _ = reader_thread.join();
-                let _ = stderr_thread.join();
-                match status {
-                    Ok(status) if !status.success() && last_visible_stderr.lock().is_none() => {
-                        let _ = events.send(DriverEvent::Error(tr!(
-                            "errors.provider_rpc_exited",
-                            provider = flavor.display_name(),
-                            status = status
-                        )));
-                    }
-                    Err(error) => {
-                        let _ = events.send(DriverEvent::Error(tr!(
-                            "errors.read_provider_exit_status",
-                            provider = format!("{} RPC", flavor.display_name()),
-                            error = error
-                        )));
-                    }
-                    _ => {}
-                }
-                let _ = events.send(DriverEvent::ProcessExited);
+                let stderr = stderr_thread.join().unwrap_or_default();
+                finish_pi_process(flavor, status, stderr, &events);
             })?;
 
         Ok(Self {
@@ -972,6 +903,128 @@ impl PiDriver {
             dialogs,
         })
     }
+}
+
+fn read_pi_stdout(
+    flavor: PiFlavor,
+    reader: impl BufRead,
+    pending: &PendingResponses,
+    commands: &Sender<CommandMessage>,
+    events: &impl DriverEventSink,
+    state: &mut PiStreamState,
+) {
+    let mut chunks = ChunkAssembly::default();
+    for line in reader.lines() {
+        match line {
+            Ok(line) if !line.trim().is_empty() => {
+                match serde_json::from_str::<Value>(&line) {
+                    Ok(value) => {
+                        // Chunk envelopes reassemble into one logical message.
+                        match chunks.accept(value) {
+                            Ok(Some(value)) => {
+                                handle_pi_message(flavor, value, pending, commands, events, state);
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                let _ = events.send(DriverEvent::Error(tr!(
+                                    "errors.provider_transport_read",
+                                    provider = flavor.display_name(),
+                                    error = error
+                                )));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let _ = events.send(DriverEvent::Error(tr!(
+                            "errors.provider_invalid_json",
+                            provider = flavor.display_name(),
+                            error = error
+                        )));
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let _ = events.send(DriverEvent::Error(tr!(
+                    "errors.provider_transport_read",
+                    provider = flavor.display_name(),
+                    error = error
+                )));
+                // lines() consumes an invalid UTF-8 line before returning
+                // InvalidData. Dropping stdout here would close a healthy
+                // process's pipe and could make its next write fail with EPIPE.
+                if error.kind() != std::io::ErrorKind::InvalidData {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Bound retained stderr without a lock, per-line formatting, or UI events.
+fn read_pi_stderr(reader: impl BufRead) -> VecDeque<String> {
+    const MAX_LINES: usize = 64;
+    const MAX_BYTES: usize = 16 * 1024;
+    let mut lines = VecDeque::<String>::with_capacity(MAX_LINES);
+    let mut bytes = 0;
+    for mut line in reader.lines().map_while(Result::ok) {
+        if line.len() > MAX_BYTES {
+            let mut end = MAX_BYTES - '…'.len_utf8();
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            line.truncate(end);
+            line.push('…');
+            line.shrink_to_fit();
+        }
+        while lines.len() == MAX_LINES || bytes + line.len() > MAX_BYTES {
+            if let Some(oldest) = lines.pop_front() {
+                bytes -= oldest.len();
+            }
+        }
+        bytes += line.len();
+        lines.push_back(line);
+    }
+    lines
+}
+
+fn finish_pi_process(
+    flavor: PiFlavor,
+    status: std::io::Result<ExitStatus>,
+    stderr: VecDeque<String>,
+    events: &impl DriverEventSink,
+) {
+    match status {
+        Ok(status) if !status.success() => {
+            let exit = tr!(
+                "errors.provider_rpc_exited",
+                provider = flavor.display_name(),
+                status = status
+            );
+            let error = provider_stderr_error(stderr.into_iter().collect())
+                .map(|message| {
+                    // The app compacts errors to six lines / 800 characters.
+                    // Reserve room for the exit status, even for a long trace.
+                    let first = message.lines().next().unwrap_or(&message);
+                    let mut diagnostic = first.chars().take(400).collect::<String>();
+                    if first.chars().count() > 400 || message.contains('\n') {
+                        diagnostic.push('…');
+                    }
+                    format!("{}: {diagnostic}\n{exit}", flavor.display_name())
+                })
+                .unwrap_or(exit);
+            let _ = events.send(DriverEvent::Error(error));
+        }
+        Err(error) => {
+            let _ = events.send(DriverEvent::Error(tr!(
+                "errors.read_provider_exit_status",
+                provider = format!("{} RPC", flavor.display_name()),
+                error = error
+            )));
+        }
+        _ => {}
+    }
+    let _ = events.send(DriverEvent::ProcessExited);
 }
 
 /// choco-pi's host bridge streams progress frames only to a host that asks.
@@ -2019,6 +2072,21 @@ fn handle_pi_message(
         return;
     }
 
+    // Completed RPC messages remain authoritative even if no streaming error
+    // delta preceded them. agent_end can carry the same completed messages.
+    if event_type == "message_end" {
+        record_pi_message_error(flavor, value.get("message"), events, state);
+    } else if event_type == "agent_end"
+        && value.get("isTerminal").and_then(Value::as_bool) != Some(false)
+        && let Some(messages) = value.get("messages").and_then(Value::as_array)
+    {
+        let last_assistant = messages
+            .iter()
+            .rev()
+            .find(|message| message.get("role").and_then(Value::as_str) == Some("assistant"));
+        record_pi_message_error(flavor, last_assistant, events, state);
+    }
+
     // Oh My Pi reuses `agent_end` for intermediate settles, flagging the real
     // one with `isTerminal`. Anything else here would end the turn early while
     // maintenance or async delivery still has work queued.
@@ -2574,6 +2642,31 @@ fn emit_completed_message_fallback(
     }
 }
 
+fn record_pi_message_error(
+    flavor: PiFlavor,
+    message: Option<&Value>,
+    events: &impl DriverEventSink,
+    state: &mut PiStreamState,
+) {
+    let Some(message) = message.filter(|message| {
+        message.get("role").and_then(Value::as_str) == Some("assistant")
+            && match message.get("stopReason").and_then(Value::as_str) {
+                Some("error") => true,
+                None => message
+                    .get("errorMessage")
+                    .and_then(Value::as_str)
+                    .is_some_and(|error| !error.is_empty()),
+                _ => false,
+            }
+    }) else {
+        return;
+    };
+    if !state.failed {
+        state.failed = true;
+        let _ = events.send(DriverEvent::Error(pi_error_message(flavor, message)));
+    }
+}
+
 fn pi_error_message(flavor: PiFlavor, value: &Value) -> String {
     value
         .get("error")
@@ -2614,6 +2707,234 @@ fn tool_title(name: &str) -> String {
 mod tests {
     use super::*;
     use crossbeam_channel::TryRecvError;
+
+    #[cfg(unix)]
+    #[test]
+    fn stderr_trace_is_non_fatal_until_a_nonzero_process_exit() {
+        const TRACE: &str = "Error: write EPIPE\n    at afterWriteDispatched (...)\n    at emitErrorCloseNT (node:internal/streams/destroy:129:3)";
+        for exit_code in [0, 1] {
+            let mut child = std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "printf '%s\\n' \"$1\" >&2; exec 2>&-; read -r done; exit \"$2\"",
+                    "waku-stderr-test",
+                    TRACE,
+                    &exit_code.to_string(),
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let (pending, commands, _command_rx, mut state) = harness();
+            let (events, event_rx) = unbounded();
+            handle_pi_message(
+                PiFlavor::ChocoPi,
+                json!({"type": "agent_start"}),
+                &pending,
+                &commands,
+                &events,
+                &mut state,
+            );
+            assert!(matches!(event_rx.recv().unwrap(), DriverEvent::TurnStarted));
+            // EOF on stderr is independent of process exit: the fake RPC is
+            // still alive, waiting for stdin. Diagnostics alone cannot prove
+            // whether the incident's Waku-hosted process exited.
+            let stderr = read_pi_stderr(BufReader::new(child.stderr.take().unwrap()));
+            assert!(child.try_wait().unwrap().is_none());
+            assert!(state.run_started && !state.failed);
+            assert!(event_rx.try_recv().is_err());
+            child.stdin.take().unwrap().write_all(b"done\n").unwrap();
+            finish_pi_process(PiFlavor::ChocoPi, child.wait(), stderr, &events);
+            if exit_code != 0 {
+                let DriverEvent::Error(message) = event_rx.recv().unwrap() else {
+                    panic!("missing non-zero exit diagnostic")
+                };
+                assert!(message.starts_with("choco-pi: Error: write EPIPE…\n"));
+                assert!(message.contains("exit status: 1"));
+            }
+            assert!(matches!(
+                event_rx.recv().unwrap(),
+                DriverEvent::ProcessExited
+            ));
+            assert!(event_rx.try_recv().is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_exit_includes_the_first_diagnostic_and_exit_status() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "printf 'Error: write EPIPE\\n' >&2; kill -TERM $$"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.signal(), Some(15));
+        let (events, event_rx) = unbounded();
+        finish_pi_process(
+            PiFlavor::ChocoPi,
+            Ok(output.status),
+            read_pi_stderr(std::io::Cursor::new(output.stderr)),
+            &events,
+        );
+        let DriverEvent::Error(message) = event_rx.recv().unwrap() else {
+            panic!("missing signal exit diagnostic")
+        };
+        assert!(message.starts_with("choco-pi: Error: write EPIPE\n"));
+        assert!(message.contains("signal: 15"));
+        assert!(matches!(
+            event_rx.recv().unwrap(),
+            DriverEvent::ProcessExited
+        ));
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_exit_keeps_status_visible_beside_long_diagnostics() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let (events, event_rx) = unbounded();
+        finish_pi_process(
+            PiFlavor::ChocoPi,
+            Ok(ExitStatus::from_raw(1 << 8)),
+            read_pi_stderr(std::io::Cursor::new(format!(
+                "provider error: {}\nmetadata\n    at emitErrorCloseNT (...)\n",
+                "x".repeat(1000)
+            ))),
+            &events,
+        );
+        let DriverEvent::Error(message) = event_rx.recv().unwrap() else {
+            panic!("missing exit diagnostic")
+        };
+        assert!(message.starts_with("choco-pi: provider error: "));
+        assert!(message.contains("exit status: 1"));
+        assert!(message.chars().count() < 800);
+        assert_eq!(message.lines().count(), 2);
+    }
+
+    #[test]
+    fn stdout_keeps_reading_after_large_json_and_invalid_lines() {
+        let (pending, commands, _command_rx, mut state) = harness();
+        let (events, event_rx) = unbounded();
+        let mut wire = serde_json::to_vec(&json!({
+            "type": "large_unknown_event", "padding": "x".repeat(1024 * 1024 + 1)
+        }))
+        .unwrap();
+        assert!(wire.len() > 1024 * 1024);
+        wire.extend_from_slice(b"\nnot json\n\xff\n{\"type\":\"agent_start\"}\n");
+        read_pi_stdout(
+            PiFlavor::ChocoPi,
+            std::io::Cursor::new(wire),
+            &pending,
+            &commands,
+            &events,
+            &mut state,
+        );
+        // Malformed frames retain their existing transport diagnostics, but
+        // neither one closes the pipe before the next valid RPC event.
+        assert!(matches!(event_rx.recv().unwrap(), DriverEvent::Error(_)));
+        assert!(matches!(event_rx.recv().unwrap(), DriverEvent::Error(_)));
+        assert!(matches!(event_rx.recv().unwrap(), DriverEvent::TurnStarted));
+        assert!(state.run_started && !state.failed);
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn completed_aborts_and_nonterminal_ends_do_not_fail_the_turn() {
+        let (pending, commands, _command_rx, mut state) = harness();
+        let (events, event_rx) = unbounded();
+        for frame in [
+            json!({"type": "agent_start"}),
+            json!({"type": "message_end", "message": {
+                "role": "assistant", "stopReason": "aborted", "errorMessage": "cancelled"
+            }}),
+            json!({"type": "agent_end", "isTerminal": false, "messages": [{
+                "role": "assistant", "stopReason": "error", "errorMessage": "retrying"
+            }]}),
+            json!({"type": "agent_end", "isTerminal": true, "messages": [{
+                "role": "assistant", "stopReason": "stop"
+            }]}),
+        ] {
+            handle_pi_message(
+                PiFlavor::OhMyPi,
+                frame,
+                &pending,
+                &commands,
+                &events,
+                &mut state,
+            );
+        }
+        assert!(matches!(event_rx.recv().unwrap(), DriverEvent::TurnStarted));
+        assert!(matches!(
+            event_rx.recv().unwrap(),
+            DriverEvent::TurnFinished { success: true, .. }
+        ));
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn stderr_ring_bounds_lines_and_bytes_without_promoting_trace_frames() {
+        let lines = (0..100).map(|i| format!("line {i}\n")).collect::<String>();
+        let stderr = read_pi_stderr(std::io::Cursor::new(lines));
+        assert_eq!(stderr.len(), 64);
+        assert_eq!(stderr.front().unwrap(), "line 36");
+        let stderr = read_pi_stderr(std::io::Cursor::new("é".repeat(20_000)));
+        assert!(stderr.iter().map(String::len).sum::<usize>() <= 16 * 1024);
+        assert!(stderr.front().unwrap().ends_with('…'));
+        let stderr = read_pi_stderr(std::io::Cursor::new("x".repeat(1000) + "\n"));
+        assert_eq!(stderr.len(), 1);
+        assert!(
+            provider_stderr_error(vec![
+                "    at emitErrorCloseNT (node:internal/streams/destroy:129:3)".into()
+            ])
+            .is_none()
+        );
+        let lines = (0..100)
+            .map(|_| "x".repeat(1000) + "\n")
+            .collect::<String>();
+        let stderr = read_pi_stderr(std::io::Cursor::new(lines));
+        assert_eq!(stderr.len(), 16);
+    }
+
+    #[test]
+    fn completed_rpc_errors_fail_the_turn_once_without_stderr() {
+        for event_type in ["message_end", "agent_end"] {
+            let (pending, commands, _command_rx, mut state) = harness();
+            let (events, event_rx) = unbounded();
+            let message = json!({
+                "role": "assistant", "stopReason": "error", "errorMessage": "RPC failure"
+            });
+            let frame = if event_type == "message_end" {
+                json!({"type": event_type, "message": message})
+            } else {
+                json!({"type": event_type, "messages": [message]})
+            };
+            for frame in [
+                json!({"type": "agent_start"}),
+                frame.clone(),
+                frame,
+                json!({"type": "agent_settled"}),
+            ] {
+                handle_pi_message(
+                    PiFlavor::ChocoPi,
+                    frame,
+                    &pending,
+                    &commands,
+                    &events,
+                    &mut state,
+                );
+            }
+            assert!(matches!(event_rx.recv().unwrap(), DriverEvent::TurnStarted));
+            assert!(
+                matches!(event_rx.recv().unwrap(), DriverEvent::Error(message) if message == "RPC failure")
+            );
+            assert!(matches!(
+                event_rx.recv().unwrap(),
+                DriverEvent::TurnFinished { success: false, .. }
+            ));
+            assert!(event_rx.try_recv().is_err());
+        }
+    }
 
     #[test]
     fn live_command_updates_reach_the_composer_and_clear_removed_commands() {
@@ -3389,7 +3710,20 @@ mod tests {
                 "type": "message_update",
                 "assistantMessageEvent": {"type": "error", "error": "temporary"}
             }),
+            json!({"type": "message_end", "message": {
+                "role": "assistant", "stopReason": "error", "errorMessage": "temporary"
+            }}),
+            json!({"type": "agent_end", "willRetry": true, "messages": [{
+                "role": "assistant", "stopReason": "error", "errorMessage": "temporary"
+            }]}),
+            json!({"type": "message_end", "message": {
+                "role": "assistant", "stopReason": "stop"
+            }}),
             json!({"type": "auto_retry_end", "success": true}),
+            json!({"type": "agent_end", "messages": [
+                {"role": "assistant", "stopReason": "error", "errorMessage": "temporary"},
+                {"role": "assistant", "stopReason": "stop"}
+            ]}),
             json!({"type": "agent_settled"}),
         ] {
             handle_pi_message(
